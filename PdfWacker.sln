@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.8.34330.188
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PdfWacker", "PdfWacker\PdfWacker.csproj", "{C1FDDBEE-8678-465F-8182-C11D96485EC8}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C1FDDBEE-8678-465F-8182-C11D96485EC8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C1FDDBEE-8678-465F-8182-C11D96485EC8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C1FDDBEE-8678-465F-8182-C11D96485EC8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C1FDDBEE-8678-465F-8182-C11D96485EC8}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {0F33EC86-E3FF-4502-AC29-C5C83B7DEE4B}
+	EndGlobalSection
+EndGlobal
