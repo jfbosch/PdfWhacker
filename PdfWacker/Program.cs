@@ -1,32 +1,32 @@
 ﻿using System.Diagnostics;
 
-if (args.Length < 3)
+if (args.Length < 2)
 {
 	Console.WriteLine("Incorrect arguments. Required:");
-	Console.WriteLine("Usage: PdfCompressor <input folder path> <output folder path> <ghostscript executable path>");
+	Console.WriteLine("Usage: PdfCompressor <working folder path> <ghostscript executable path>");
 	Console.WriteLine("Press any key to quit.");
 	return;
 }
 
-string inputFolderPath = args[0];
-string outputFolderPath = args[1];
-string ghostscriptExecutablePath = args[2];
+string workingFolderPath = args[0];
+string ghostscriptExecutablePath = args[1];
 
-string inputToCompressFolderPath = Path.Combine(inputFolderPath, "ToCompress");
-string inputToCompressProcessedFolderPath = Path.Combine(inputToCompressFolderPath, "Processed");
-string outputCompressedFolderPath = Path.Combine(outputFolderPath, "Compressed");
+string compressionInputFolderPath = Path.Combine(workingFolderPath, "CompressionInput");
+string compressionProcessedFolderPath = Path.Combine(workingFolderPath, "CompressionOriginal");
+string compressionOutputFolderPath = Path.Combine(workingFolderPath, "CompressionOutput");
 
-Directory.CreateDirectory(inputToCompressProcessedFolderPath);
-Directory.CreateDirectory(outputCompressedFolderPath);
+Directory.CreateDirectory(compressionInputFolderPath);
+Directory.CreateDirectory(compressionProcessedFolderPath);
+Directory.CreateDirectory(compressionOutputFolderPath);
 
 if (!File.Exists(ghostscriptExecutablePath))
 {
 	throw new FileNotFoundException("Ghostscript executable not found.", ghostscriptExecutablePath);
 }
 
-CompressExistingFiles(inputToCompressFolderPath, outputCompressedFolderPath, inputToCompressProcessedFolderPath, ghostscriptExecutablePath);
+CompressExistingFiles(compressionInputFolderPath, compressionOutputFolderPath, compressionProcessedFolderPath, ghostscriptExecutablePath);
 
-var watcher = new FileSystemWatcher(inputToCompressFolderPath)
+var watcher = new FileSystemWatcher(compressionInputFolderPath)
 {
 	NotifyFilter = NotifyFilters.FileName,
 	Filter = "*.pdf"
@@ -35,13 +35,13 @@ var watcher = new FileSystemWatcher(inputToCompressFolderPath)
 watcher.Created += (sender, e) =>
 {
 	WaitForFileToBeReady(e.FullPath);
-	CompressFile(e.FullPath, outputCompressedFolderPath, inputToCompressProcessedFolderPath, ghostscriptExecutablePath);
+	CompressFile(e.FullPath, compressionOutputFolderPath, compressionProcessedFolderPath, ghostscriptExecutablePath);
 };
 
 watcher.EnableRaisingEvents = true;
 
 Console.WriteLine("");
-Console.WriteLine("Watching for new PDF files in " + inputToCompressFolderPath);
+Console.WriteLine("Watching for new PDF files in " + compressionInputFolderPath);
 Console.WriteLine("Press any key to quit.");
 
 while (true)
