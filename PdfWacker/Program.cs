@@ -105,10 +105,7 @@ void CompressFile(
 		//catch (NotImplementedException ex) when (ex.Message.Contains("Encrypted files are currently not supported", StringComparison.InvariantCultureIgnoreCase))
 		//{
 		//	Console.WriteLine("Unable to compress because PDF is password protected; copying original file to output.");
-		//	if (File.Exists(outputFilePath))
-		//		File.Delete(outputFilePath);
-		//	WaitForFileToBeReady(filePath);
-		//	File.Move(filePath, outputFilePath);
+		//MoveAndReplaceFile(filePath, outputFilePath);
 		//}
 		//Console.WriteLine($"PDF compatibility version: {originalPdfVersion}");
 
@@ -138,10 +135,11 @@ void CompressFile(
 			compressionProcess.WaitForExit();
 		}
 
+
 		if (pdfIsPasswordProtected)
 		{
 			Console.WriteLine("Unable to compress because PDF is password protected; copying original file to output.");
-			File.Copy(filePath, outputFilePath, true);
+			MoveAndReplaceFile(filePath, outputFilePath);
 			return;
 		}
 
@@ -161,9 +159,7 @@ void CompressFile(
 			Console.WriteLine($"{compressionRatio:F2} % of original size.");
 		}
 
-		if (File.Exists(processedFilePath))
-			File.Delete(processedFilePath);
-		File.Move(filePath, processedFilePath);
+		MoveAndReplaceFile(filePath, processedFilePath);
 	}
 	catch (Exception ex)
 	{
@@ -201,4 +197,11 @@ bool IsFileReady(string filePath)
 		// or being processed by another thread.
 		return false;
 	}
+}
+
+static void MoveAndReplaceFile(string filePath, string targetFilePath)
+{
+	if (File.Exists(targetFilePath))
+		File.Delete(targetFilePath);
+	File.Move(filePath, targetFilePath);
 }
