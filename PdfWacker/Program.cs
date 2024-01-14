@@ -41,7 +41,7 @@ watcher.Created += (sender, e) =>
 watcher.EnableRaisingEvents = true;
 
 Console.WriteLine("");
-Console.WriteLine("Watching for new PDF files in " + compressionInputFolderPath);
+Console.WriteLine("Watching for new PDF files in " + Path.GetFullPath(compressionInputFolderPath));
 Console.WriteLine("Press any key to quit.");
 
 while (true)
@@ -108,7 +108,7 @@ void CompressFile(
 		// Check if effective compression was possible
 		if (compressionRatio > 95.0)
 		{
-			Console.WriteLine("Effective compression not possible, copying original file.");
+			Console.WriteLine("Effective compression not possible, copying original file to output.");
 			File.Copy(filePath, outputFilePath, true); // Replace the file in the output folder
 		}
 		else
