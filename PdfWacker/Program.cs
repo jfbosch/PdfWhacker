@@ -62,6 +62,16 @@ void CompressExistingFiles(string inputFolder, string outputFolder, string proce
 	}
 }
 
+double GetPDFCompatibilityVersion(
+	string pdfFilePath)
+{
+	using org.pdfclown.files.File file = new(pdfFilePath);
+	var document = file.Document;
+	var info = document.Information;
+	return double.Parse(file.Version.ToString());
+}
+
+
 void CompressFile(
 	string filePath,
 	string outputFolderPath,
@@ -77,14 +87,30 @@ void CompressFile(
 		}
 
 		string fileName = Path.GetFileName(filePath);
+		string outputFilePath = Path.Combine(outputFolderPath, fileName);
+		string processedFilePath = Path.Combine(processedFolderPath, fileName);
+
 		Console.WriteLine("");
 		Console.WriteLine("-------------------------");
 		Console.WriteLine($"Compressing file: {fileName}");
 
 		WaitForFileToBeReady(filePath);
 
-		string outputFilePath = Path.Combine(outputFolderPath, fileName);
-		string processedFilePath = Path.Combine(processedFolderPath, fileName);
+
+		//double originalPdfVersion = 0;
+		//try
+		//{
+		//	originalPdfVersion = GetPDFCompatibilityVersion(filePath);
+		//}
+		//catch (NotImplementedException ex) when (ex.Message.Contains("Encrypted files are currently not supported", StringComparison.InvariantCultureIgnoreCase))
+		//{
+		//	Console.WriteLine("Unable to compress because PDF is password protected; copying original file to output.");
+		//	if (File.Exists(outputFilePath))
+		//		File.Delete(outputFilePath);
+		//	WaitForFileToBeReady(filePath);
+		//	File.Move(filePath, outputFilePath);
+		//}
+		//Console.WriteLine($"PDF compatibility version: {originalPdfVersion}");
 
 		var originalSize = new FileInfo(filePath).Length;
 
@@ -109,7 +135,6 @@ void CompressFile(
 				if (errorOutput.Contains("This file requires a password for access", StringComparison.InvariantCultureIgnoreCase))
 					pdfIsPasswordProtected = true;
 			}
-
 			compressionProcess.WaitForExit();
 		}
 
@@ -120,7 +145,6 @@ void CompressFile(
 			return;
 		}
 
-		// Get compressed file size
 		var compressedSize = new FileInfo(outputFilePath).Length;
 		double compressionRatio = (double)compressedSize / originalSize * 100;
 
@@ -138,9 +162,7 @@ void CompressFile(
 		}
 
 		if (File.Exists(processedFilePath))
-		{
 			File.Delete(processedFilePath);
-		}
 		File.Move(filePath, processedFilePath);
 	}
 	catch (Exception ex)
