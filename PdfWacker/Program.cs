@@ -12,19 +12,21 @@ string inputFolderPath = args[0];
 string outputFolderPath = args[1];
 string ghostscriptExecutablePath = args[2];
 
+string inputToCompressFolderPath = Path.Combine(inputFolderPath, "ToCompress");
+string inputToCompressProcessedFolderPath = Path.Combine(inputToCompressFolderPath, "Processed");
+string outputCompressedFolderPath = Path.Combine(outputFolderPath, "Compressed");
+
+Directory.CreateDirectory(inputToCompressProcessedFolderPath);
+Directory.CreateDirectory(outputCompressedFolderPath);
+
 if (!File.Exists(ghostscriptExecutablePath))
 {
 	throw new FileNotFoundException("Ghostscript executable not found.", ghostscriptExecutablePath);
 }
 
-string processedFolderPath = Path.Combine(inputFolderPath, "Processed");
+CompressExistingFiles(inputToCompressFolderPath, outputCompressedFolderPath, inputToCompressProcessedFolderPath, ghostscriptExecutablePath);
 
-Directory.CreateDirectory(processedFolderPath);
-Directory.CreateDirectory(outputFolderPath);
-
-ProcessExistingFiles(inputFolderPath, outputFolderPath, processedFolderPath, ghostscriptExecutablePath);
-
-var watcher = new FileSystemWatcher(inputFolderPath)
+var watcher = new FileSystemWatcher(inputToCompressFolderPath)
 {
 	NotifyFilter = NotifyFilters.FileName,
 	Filter = "*.pdf"
@@ -32,15 +34,14 @@ var watcher = new FileSystemWatcher(inputFolderPath)
 
 watcher.Created += (sender, e) =>
 {
-	// Wait for the file to be fully available
-	Thread.Sleep(500);
-	ProcessFile(e.FullPath, outputFolderPath, processedFolderPath, ghostscriptExecutablePath);
+	WaitForFileToBeReady(e.FullPath);
+	CompressFile(e.FullPath, outputCompressedFolderPath, inputToCompressProcessedFolderPath, ghostscriptExecutablePath);
 };
 
 watcher.EnableRaisingEvents = true;
 
 Console.WriteLine("");
-Console.WriteLine("Watching for new PDF files in " + inputFolderPath);
+Console.WriteLine("Watching for new PDF files in " + inputToCompressFolderPath);
 Console.WriteLine("Press any key to quit.");
 
 while (true)
@@ -53,15 +54,19 @@ while (true)
 	Thread.Sleep(1000); // Sleep for a while before checking again
 }
 
-void ProcessExistingFiles(string inputFolder, string outputFolder, string processedFolder, string gsPath)
+void CompressExistingFiles(string inputFolder, string outputFolder, string processedFolder, string gsPath)
 {
 	foreach (var filePath in Directory.EnumerateFiles(inputFolder, "*.pdf"))
 	{
-		ProcessFile(filePath, outputFolder, processedFolder, gsPath);
+		CompressFile(filePath, outputFolder, processedFolder, gsPath);
 	}
 }
 
-void ProcessFile(string filePath, string outputFolderPath, string processedFolderPath, string ghostscriptPath)
+void CompressFile(
+	string filePath,
+	string outputFolderPath,
+	string processedFolderPath,
+	string ghostscriptPath)
 {
 	try
 	{
@@ -73,8 +78,10 @@ void ProcessFile(string filePath, string outputFolderPath, string processedFolde
 
 		string fileName = Path.GetFileName(filePath);
 		Console.WriteLine("");
-		Console.WriteLine("-----------------------");
-		Console.WriteLine($"Processing file: {fileName}");
+		Console.WriteLine("-------------------------");
+		Console.WriteLine($"Compressing file: {fileName}");
+
+		WaitForFileToBeReady(filePath);
 
 		string outputFilePath = Path.Combine(outputFolderPath, fileName);
 		string processedFilePath = Path.Combine(processedFolderPath, fileName);
@@ -111,8 +118,6 @@ void ProcessFile(string filePath, string outputFolderPath, string processedFolde
 			Console.WriteLine($"{compressionRatio:F2} % of original size.");
 		}
 
-		// Move original file to processed folder, replace if exists
-		Thread.Sleep(50);
 		if (File.Exists(processedFilePath))
 		{
 			File.Delete(processedFilePath);
@@ -123,5 +128,36 @@ void ProcessFile(string filePath, string outputFolderPath, string processedFolde
 	{
 		Console.WriteLine($"Error processing file {Path.GetFileName(filePath)}");
 		Console.WriteLine($"Stack Trace: {ex.ToString()}");
+	}
+}
+
+void WaitForFileToBeReady(string filePath)
+{
+	while (!(IsFileReady(filePath)))
+	{
+		Thread.Sleep(250);
+	}
+}
+
+bool IsFileReady(string filePath)
+{
+	if (!File.Exists(filePath))
+		throw new FileNotFoundException("The file to process cannot be found.", filePath);
+
+	// If the file can be opened for exclusive access it means that the file
+	// is no longer locked by another process.
+	try
+	{
+		using (FileStream inputStream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.None))
+		{
+			return inputStream.Length > 0;
+		}
+	}
+	catch (Exception)
+	{
+		// The file is unavailable because it is:
+		// still being written to
+		// or being processed by another thread.
+		return false;
 	}
 }
