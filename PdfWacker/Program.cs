@@ -88,17 +88,36 @@ void CompressFile(
 
 		var originalSize = new FileInfo(filePath).Length;
 
+		bool pdfIsPasswordProtected = false;
+
 		// Set up and start the Ghostscript process
 		ProcessStartInfo psi = new ProcessStartInfo
 		{
 			FileName = ghostscriptPath,
-			Arguments = $"-sDEVICE=pdfwrite -dCompatibilityLevel=2.0 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"{outputFilePath}\" \"{filePath}\"",
+			Arguments = $"-sDEVICE=pdfwrite -dCompatibilityLevel=1.7 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"{outputFilePath}\" \"{filePath}\"",
 			UseShellExecute = false,
-			CreateNoWindow = true
+			CreateNoWindow = true,
+			RedirectStandardError = true,
 		};
-		using (Process process = Process.Start(psi))
+		using (Process compressionProcess = Process.Start(psi))
 		{
-			process.WaitForExit();
+			string errorOutput = compressionProcess.StandardError.ReadToEnd();
+
+			if (!string.IsNullOrEmpty(errorOutput))
+			{
+				Console.WriteLine($"Error: {errorOutput}");
+				if (errorOutput.Contains("This file requires a password for access", StringComparison.InvariantCultureIgnoreCase))
+					pdfIsPasswordProtected = true;
+			}
+
+			compressionProcess.WaitForExit();
+		}
+
+		if (pdfIsPasswordProtected)
+		{
+			Console.WriteLine("Unable to compress because PDF is password protected; copying original file to output.");
+			File.Copy(filePath, outputFilePath, true);
+			return;
 		}
 
 		// Get compressed file size
