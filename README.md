@@ -19,7 +19,9 @@ The application requires two command-line arguments:
 
 Here is an example of how to run the application:
 
-PdfWacker.exe "working folder path" "ghostscript executable path"
+```
+PdfWacker.exe <working folder path> <ghostscript executable path>
+```
 
 
 The working folder should contain three subfolders:
