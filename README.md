@@ -28,7 +28,11 @@ The working folder should contain three subfolders:
 - CompressionOriginal: The application moves the original PDF files to this folder after compressing them.
 - CompressionOutput: The application saves the compressed PDF files in this folder.
 
-- If these folders do not exist, the application creates them.
+If these folders do not exist, the application creates them.
+
+If the compression achieved is less than 5% smaller than the original, then it is considered ineffective and the original file is output to the compressed folder. 
+Similarly, if a PDF is password protected, the original file is output to the compressed folder, as compression is not possible on encrypted PDFs. 
+
 
 ## Requirements
 
@@ -39,7 +43,6 @@ The working folder should contain three subfolders:
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for details.
-
 
 
 ## Back story
