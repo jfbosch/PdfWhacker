@@ -73,28 +73,28 @@ double GetPDFCompatibilityVersion(
 
 
 void CompressFile(
-	string filePath,
+	string inputFilePath,
 	string outputFolderPath,
-	string processedFolderPath,
+	string processedOriginalFolderPath,
 	string ghostscriptPath)
 {
 	try
 	{
-		if (!File.Exists(filePath))
+		if (!File.Exists(inputFilePath))
 		{
-			Console.WriteLine($"File not found: {filePath}");
+			Console.WriteLine($"Input file not found: {inputFilePath}");
 			return;
 		}
 
-		string fileName = Path.GetFileName(filePath);
-		string outputFilePath = Path.Combine(outputFolderPath, fileName);
-		string processedFilePath = Path.Combine(processedFolderPath, fileName);
+		string inputFileName = Path.GetFileName(inputFilePath);
+		string outputFilePath = Path.Combine(outputFolderPath, inputFileName);
+		string processedOriginalFilePath = Path.Combine(processedOriginalFolderPath, inputFileName);
 
 		Console.WriteLine("");
 		Console.WriteLine("-------------------------");
-		Console.WriteLine($"Compressing file: {fileName}");
+		Console.WriteLine($"Compressing file: {inputFileName}");
 
-		WaitForFileToBeReady(filePath);
+		WaitForFileToBeReady(inputFilePath);
 
 
 		//double originalPdfVersion = 0;
@@ -109,7 +109,9 @@ void CompressFile(
 		//}
 		//Console.WriteLine($"PDF compatibility version: {originalPdfVersion}");
 
-		var originalSize = new FileInfo(filePath).Length;
+		var originalSize = new FileInfo(inputFilePath).Length;
+
+		File.Copy(inputFilePath, processedOriginalFilePath, true);
 
 		bool pdfIsPasswordProtected = false;
 
@@ -117,7 +119,7 @@ void CompressFile(
 		ProcessStartInfo psi = new ProcessStartInfo
 		{
 			FileName = ghostscriptPath,
-			Arguments = $"-sDEVICE=pdfwrite -dCompatibilityLevel=1.7 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"{outputFilePath}\" \"{filePath}\"",
+			Arguments = $"-sDEVICE=pdfwrite -dCompatibilityLevel=1.7 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"{outputFilePath}\" \"{inputFilePath}\"",
 			UseShellExecute = false,
 			CreateNoWindow = true,
 			RedirectStandardError = true,
@@ -139,7 +141,15 @@ void CompressFile(
 		if (pdfIsPasswordProtected)
 		{
 			Console.WriteLine("Unable to compress because PDF is password protected; copying original file to output.");
-			MoveAndReplaceFile(filePath, outputFilePath);
+			File.Copy(processedOriginalFilePath, outputFilePath, true);
+			File.Delete(inputFilePath);
+			return;
+		}
+		else if (!File.Exists(outputFilePath))
+		{
+			Console.WriteLine("Unable to compress due to unexpected error; copying original file to output.");
+			File.Copy(processedOriginalFilePath, outputFilePath, true);
+			File.Delete(inputFilePath);
 			return;
 		}
 
@@ -150,7 +160,7 @@ void CompressFile(
 		if (compressionRatio > 95.0)
 		{
 			Console.WriteLine("Effective compression not possible, copying original file to output.");
-			File.Copy(filePath, outputFilePath, true); // Replace the file in the output folder
+			File.Copy(processedOriginalFilePath, outputFilePath, true);
 		}
 		else
 		{
@@ -159,11 +169,12 @@ void CompressFile(
 			Console.WriteLine($"{compressionRatio:F2} % of original size.");
 		}
 
-		MoveAndReplaceFile(filePath, processedFilePath);
+		if (File.Exists(inputFilePath))
+			File.Delete(inputFilePath);
 	}
 	catch (Exception ex)
 	{
-		Console.WriteLine($"Error processing file {Path.GetFileName(filePath)}");
+		Console.WriteLine($"Error processing file {Path.GetFileName(inputFilePath)}");
 		Console.WriteLine($"Stack Trace: {ex.ToString()}");
 	}
 }
