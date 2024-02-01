@@ -1,4 +1,4 @@
-﻿namespace PdfWacker
+﻿namespace PdfWhacker
 {
 	public static class Extensions
 	{

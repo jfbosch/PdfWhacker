@@ -1,6 +1,6 @@
 ﻿using System.Diagnostics;
 
-namespace PdfWacker
+namespace PdfWhacker
 {
 	public class PdfCompressor
 	{

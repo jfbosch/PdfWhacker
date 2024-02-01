@@ -1,6 +1,6 @@
-# PdfWacker
+# PdfWhacker
 
-PdfWacker is a console application written in C# that watches a specified directory for new PDF files and automatically compresses them using Ghostscript. The application also compresses existing PDF files in the directory when it starts.
+PdfWhacker is a console application written in C# that watches a specified directory for new PDF files and automatically compresses them using Ghostscript. The application also compresses existing PDF files in the directory when it starts.
 
 ## Features
 
@@ -20,7 +20,7 @@ The application requires two command-line arguments:
 Here is an example of how to run the application:
 
 ```
-PdfWacker.exe <working folder path> <ghostscript executable path>
+PdfWhacker.exe <working folder path> <ghostscript executable path>
 ```
 
 

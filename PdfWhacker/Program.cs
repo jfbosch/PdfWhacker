@@ -1,5 +1,4 @@
-﻿using PdfWacker;
-using System.Diagnostics;
+﻿using PdfWhacker;
 
 if (args.Length < 2)
 {
@@ -66,10 +65,7 @@ void CompressExistingFiles(string inputFolder, string outputFolder, string proce
 double GetPDFCompatibilityVersion(
 	string pdfFilePath)
 {
-	using org.pdfclown.files.File file = new(pdfFilePath);
-	var document = file.Document;
-	var info = document.Information;
-	return double.Parse(file.Version.ToString());
+	throw new NotImplementedException();
 }
 
 
