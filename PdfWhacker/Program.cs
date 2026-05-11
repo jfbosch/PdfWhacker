@@ -16,10 +16,15 @@ if (!File.Exists(ghostscriptExecutablePath))
 	throw new FileNotFoundException("Ghostscript executable not found.", ghostscriptExecutablePath);
 }
 
+MigrateOldFolder(Path.Combine(workingFolderPath, "CompressionOriginal"), Path.Combine(workingFolderPath, "Original", "Compression"));
+MigrateOldFolder(Path.Combine(workingFolderPath, "MergeOriginal"), Path.Combine(workingFolderPath, "Original", "Merge"));
+MigrateOldFolder(Path.Combine(workingFolderPath, "CompressionOutput"), Path.Combine(workingFolderPath, "Output"));
+MigrateOldFolder(Path.Combine(workingFolderPath, "MergeOutput"), Path.Combine(workingFolderPath, "Output"));
+
 { // PDF Compression
 	string compressionInputFolderPath = Path.Combine(workingFolderPath, "CompressionInput");
-	string compressionProcessedFolderPath = Path.Combine(workingFolderPath, "CompressionOriginal");
-	string compressionOutputFolderPath = Path.Combine(workingFolderPath, "CompressionOutput");
+	string compressionProcessedFolderPath = Path.Combine(workingFolderPath, "Original", "Compression");
+	string compressionOutputFolderPath = Path.Combine(workingFolderPath, "Output");
 	Directory.CreateDirectory(compressionInputFolderPath);
 	Directory.CreateDirectory(compressionProcessedFolderPath);
 	Directory.CreateDirectory(compressionOutputFolderPath);
@@ -52,8 +57,8 @@ if (!File.Exists(ghostscriptExecutablePath))
 
 // PDF Merge
 string mergeInputFolderPath = Path.Combine(workingFolderPath, "MergeInput");
-string mergeProcessedFolderPath = Path.Combine(workingFolderPath, "MergeOriginal");
-string mergeOutputFolderPath = Path.Combine(workingFolderPath, "MergeOutput");
+string mergeProcessedFolderPath = Path.Combine(workingFolderPath, "Original", "Merge");
+string mergeOutputFolderPath = Path.Combine(workingFolderPath, "Output");
 {
 	Directory.CreateDirectory(mergeInputFolderPath);
 	Directory.CreateDirectory(mergeProcessedFolderPath);
@@ -132,5 +137,36 @@ double GetPDFCompatibilityVersion(
 	string pdfFilePath)
 {
 	throw new NotImplementedException();
+}
+
+void MigrateOldFolder(string oldFolder, string newFolder)
+{
+	if (!Directory.Exists(oldFolder))
+		return;
+
+	Directory.CreateDirectory(newFolder);
+
+	int moved = 0;
+	int skipped = 0;
+	foreach (var sourcePath in Directory.EnumerateFiles(oldFolder))
+	{
+		string fileName = Path.GetFileName(sourcePath);
+		string destPath = Path.Combine(newFolder, fileName);
+		if (File.Exists(destPath))
+		{
+			Console.WriteLine($"Skipping migration of '{fileName}' from '{oldFolder}' — file already exists at '{destPath}'.");
+			skipped++;
+			continue;
+		}
+		File.Move(sourcePath, destPath);
+		moved++;
+	}
+
+	string suffix = skipped > 0 ? $" ({skipped} skipped due to existing files)" : "";
+	Console.WriteLine($"Migrated {moved} file(s) from '{oldFolder}' to '{newFolder}'{suffix}.");
+
+	bool isEmpty = !Directory.EnumerateFileSystemEntries(oldFolder).Any();
+	if (isEmpty)
+		Directory.Delete(oldFolder);
 }
 

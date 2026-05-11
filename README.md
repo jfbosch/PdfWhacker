@@ -9,14 +9,14 @@ As a supplementary note, it is important to clarify that Ghostscript does not 'm
 
 Compress PDFs:
 
-- Watches the CompressionInput directory for new PDF files and compresses them automatically into the CompressionOutput directory.
+- Watches the CompressionInput directory for new PDF files and compresses them automatically into the Output directory.
 - Compresses existing PDF files in the CompressionInput directory on startup, if there are any.
 
 
 Merge PDFs
 
 - Watches the MergeInput directory for new PDF files to be merged and prints the found files to the console.
-- Once all files are found, press (m) to merge them all and have the merged.pdf placed in the MergeOutput directory.
+- Once all files are found, press (m) to merge them all and have the merged.pdf placed in the Output directory.
 - Merges existing PDF files in the MergeInput directory on startup, if there are any.
 
 General.
@@ -37,17 +37,17 @@ PdfWhacker.exe <working folder path> <ghostscript executable path>
 ```
 
 
-The working directory should contain six subdirectories:
+The working directory will contain the following subdirectories:
 
 - CompressionInput: The application watches this directory for new PDF files to compress.
-- CompressionOriginal: The application moves the original PDF files to this directory after compressing them.
-- CompressionOutput: The application saves the compressed PDF files in this directory .
 - MergeInput: The application watches this directory for new PDF files to be merged.
-- MergeOriginal: The application moves the original PDF files to this directory after merging them.
-- MergeOutput: The application saves the merged PDF file in this directory with the name merged.pdf..
+- Original/Compression: The application moves the original PDF files to this directory after compressing them.
+- Original/Merge: The application moves the original PDF files to this directory after merging them.
+- Output: The application saves both compressed PDF files (using their original filenames) and the merged PDF file (named merged.pdf) in this directory.
 
-- 
 If these directories do not exist, the application creates them.
+
+If you ran an older version of PdfWhacker, the legacy `CompressionOriginal`, `CompressionOutput`, `MergeOriginal`, and `MergeOutput` folders are migrated automatically into the new structure on startup. Files whose names already exist at the destination are left in place so nothing is silently overwritten.
 
 
 During compression
