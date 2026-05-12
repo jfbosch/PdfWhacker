@@ -67,9 +67,9 @@ public class FileReadyWaiterTests : IDisposable
 		// Release the lock after 150ms; waiter should pick it up well within its 2-second budget.
 		var releaser = Task.Run(async () =>
 		{
-			await Task.Delay(150);
+			await Task.Delay(150, TestContext.Current.CancellationToken);
 			holder.Dispose();
-		});
+		}, TestContext.Current.CancellationToken);
 
 		bool result = FileReadyWaiter.TryWait(path, TimeSpan.FromSeconds(2), pollInterval: TimeSpan.FromMilliseconds(50));
 		await releaser;
