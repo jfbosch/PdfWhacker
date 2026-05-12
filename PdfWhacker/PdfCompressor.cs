@@ -1,113 +1,115 @@
-﻿using System.Diagnostics;
-
 namespace PdfWhacker;
 
 public class PdfCompressor
 {
+	private const double SizeRatioThreshold = 0.95;
+	private static readonly TimeSpan FileReadyTimeout = TimeSpan.FromMinutes(2);
+
 	public void CompressFile(
 		string inputFilePath,
 		string outputFolderPath,
 		string processedOriginalFolderPath,
 		string ghostscriptPath)
 	{
+		string inputFileName = Path.GetFileName(inputFilePath);
 		try
 		{
-			if (!File.Exists(inputFilePath))
-			{
-				Console.WriteLine($"Input file not found: {inputFilePath}");
-				return;
-			}
-
-			string inputFileName = Path.GetFileName(inputFilePath);
-			string outputFilePath = Path.Combine(outputFolderPath, inputFileName);
-			string processedOriginalFilePath = Path.Combine(processedOriginalFolderPath, inputFileName);
-
-			Console.WriteLine("");
+			Console.WriteLine();
 			Console.WriteLine("-------------------------");
 			Console.WriteLine($"Compressing file: {inputFileName}");
 
-			inputFilePath.WaitForFileToBeReady();
-
-
-			//double originalPdfVersion = 0;
-			//try
-			//{
-			//	originalPdfVersion = GetPDFCompatibilityVersion(filePath);
-			//}
-			//catch (NotImplementedException ex) when (ex.Message.Contains("Encrypted files are currently not supported", StringComparison.InvariantCultureIgnoreCase))
-			//{
-			//	Console.WriteLine("Unable to compress because PDF is password protected; copying original file to output.");
-			//MoveAndReplaceFile(filePath, outputFilePath);
-			//}
-			//Console.WriteLine($"PDF compatibility version: {originalPdfVersion}");
-
-			var originalSize = new FileInfo(inputFilePath).Length;
-
-			File.Copy(inputFilePath, processedOriginalFilePath, true);
-
-			bool pdfIsPasswordProtected = false;
-
-			// Set up and start the Ghostscript process
-			ProcessStartInfo psi = new ProcessStartInfo
+			if (!FileReadyWaiter.TryWait(inputFilePath, FileReadyTimeout))
 			{
-				FileName = ghostscriptPath,
-				Arguments = $"-sDEVICE=pdfwrite -dCompatibilityLevel=1.7 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"{outputFilePath}\" \"{inputFilePath}\"",
-				UseShellExecute = false,
-				CreateNoWindow = true,
-				RedirectStandardError = true,
-			};
-			using (Process compressionProcess = Process.Start(psi))
-			{
-				string errorOutput = compressionProcess.StandardError.ReadToEnd();
-
-				if (!string.IsNullOrEmpty(errorOutput))
-				{
-					Console.WriteLine($"Error: {errorOutput}");
-					if (errorOutput.Contains("This file requires a password for access", StringComparison.InvariantCultureIgnoreCase))
-						pdfIsPasswordProtected = true;
-				}
-				compressionProcess.WaitForExit();
-			}
-
-
-			if (pdfIsPasswordProtected)
-			{
-				Console.WriteLine("Unable to compress because PDF is password protected; copying original file to output.");
-				File.Copy(processedOriginalFilePath, outputFilePath, true);
-				File.Delete(inputFilePath);
-				return;
-			}
-			else if (!File.Exists(outputFilePath))
-			{
-				Console.WriteLine("Unable to compress due to unexpected error; copying original file to output.");
-				File.Copy(processedOriginalFilePath, outputFilePath, true);
-				File.Delete(inputFilePath);
+				Console.WriteLine($"Input file not available or never became readable: {inputFilePath}");
 				return;
 			}
 
-			var compressedSize = new FileInfo(outputFilePath).Length;
-			double compressionRatio = (double)compressedSize / originalSize * 100;
+			string outputFilePath = Path.Combine(outputFolderPath, inputFileName);
+			string processedOriginalFilePath = Path.Combine(processedOriginalFolderPath, inputFileName);
 
-			// Check if effective compression was possible
-			if (compressionRatio > 95.0)
+			long originalSize = new FileInfo(inputFilePath).Length;
+			if (originalSize == 0)
 			{
-				Console.WriteLine("Effective compression not possible, copying original file to output.");
-				File.Copy(processedOriginalFilePath, outputFilePath, true);
+				Console.WriteLine("Empty input file; leaving in place.");
+				return;
+			}
+
+			File.Copy(inputFilePath, processedOriginalFilePath, overwrite: true);
+
+			GhostscriptResult result;
+			try
+			{
+				result = GhostscriptRunner.Compress(ghostscriptPath, inputFilePath, outputFilePath);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Ghostscript invocation failed: {ex.Message}");
+				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, "ghostscript invocation failed");
+				DeleteIfExists(inputFilePath);
+				return;
+			}
+
+			if (result.PasswordProtected)
+			{
+				Console.WriteLine("PDF is password-protected; copying original to output.");
+				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
+				DeleteIfExists(inputFilePath);
+				return;
+			}
+
+			if (!result.Succeeded)
+			{
+				Console.WriteLine(result.TimedOut
+					? "Ghostscript timed out; copying original to output."
+					: $"Ghostscript exited with code {result.ExitCode}; copying original to output.");
+				if (!string.IsNullOrWhiteSpace(result.StandardError))
+					Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
+				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
+				DeleteIfExists(inputFilePath);
+				return;
+			}
+
+			if (!File.Exists(outputFilePath) || !GhostscriptRunner.IsValidPdfStructure(outputFilePath))
+			{
+				Console.WriteLine("Ghostscript output missing or failed structural validation; copying original to output.");
+				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
+				DeleteIfExists(inputFilePath);
+				return;
+			}
+
+			long compressedSize = new FileInfo(outputFilePath).Length;
+			double ratio = (double)compressedSize / originalSize;
+
+			if (ratio > SizeRatioThreshold)
+			{
+				Console.WriteLine($"Compression saved <{(1 - SizeRatioThreshold) * 100:F0}%; copying original to output.");
+				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
 			}
 			else
 			{
-				Console.WriteLine($"{originalSize} bytes - Original Size");
-				Console.WriteLine($"{compressedSize} bytes - Compressed Size");
-				Console.WriteLine($"{compressionRatio:F2} % of original size.");
+				Console.WriteLine($"Original:   {originalSize:N0} bytes");
+				Console.WriteLine($"Compressed: {compressedSize:N0} bytes ({ratio * 100:F2}% of original)");
 			}
 
-			if (File.Exists(inputFilePath))
-				File.Delete(inputFilePath);
+			DeleteIfExists(inputFilePath);
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"Error processing file for compression {Path.GetFileName(inputFilePath)}");
-			Console.WriteLine($"Stack Trace: {ex.ToString()}");
+			Console.WriteLine($"Error processing file for compression: {inputFileName}");
+			Console.WriteLine($"Stack trace: {ex}");
 		}
+	}
+
+	private static void CopyOriginalToOutput(string originalCopyPath, string outputFilePath, string? reason)
+	{
+		if (!string.IsNullOrEmpty(reason))
+			Console.WriteLine($"Falling back to original ({reason}).");
+		File.Copy(originalCopyPath, outputFilePath, overwrite: true);
+	}
+
+	private static void DeleteIfExists(string path)
+	{
+		if (File.Exists(path))
+			File.Delete(path);
 	}
 }
