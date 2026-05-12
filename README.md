@@ -16,7 +16,7 @@ Compress PDFs:
 Merge PDFs
 
 - Watches the MergeInput directory for new PDF files to be merged and prints the found files to the console.
-- Once all files are found, press (m) to merge them all and have the merged.pdf placed in the Output directory.
+- Once all files are found, press `m` then Enter to merge them all. The merged file is written to the Output directory as `merged-<timestamp>.pdf` (so prior merges are never overwritten).
 - Merges existing PDF files in the MergeInput directory on startup, if there are any.
 
 General.
@@ -43,7 +43,7 @@ The working directory will contain the following subdirectories:
 - MergeInput: The application watches this directory for new PDF files to be merged.
 - Original/Compression: The application moves the original PDF files to this directory after compressing them.
 - Original/Merge: The application moves the original PDF files to this directory after merging them.
-- Output: The application saves both compressed PDF files (using their original filenames) and the merged PDF file (named merged.pdf) in this directory.
+- Output: The application saves both compressed PDF files (using their original filenames) and merged PDF files (named `merged-<timestamp>.pdf`) in this directory.
 
 If these directories do not exist, the application creates them.
 
@@ -52,7 +52,7 @@ If you ran an older version of PdfWhacker, the legacy `CompressionOriginal`, `Co
 
 During compression
 
-- If the compression achieved is less than 5% smaller than the original, then it is considered ineffective and the original file is output to the compressed folder. 
+- If the compressed output is more than 95% of the original size (i.e. less than a 5% reduction), the compression is considered ineffective and the original file is output to the compressed folder. 
 - Similarly, if a PDF is password protected, the original file is output to the compressed folder, as compression is not possible on encrypted PDFs. 
 
 - 

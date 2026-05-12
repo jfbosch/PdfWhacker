@@ -1,6 +1,3 @@
-using System.Diagnostics;
-using System.Text;
-
 namespace PdfWhacker;
 
 public class RecursivePdfCompressor
@@ -39,7 +36,8 @@ public class RecursivePdfCompressor
 				RecurseSubdirectories = true,
 				AttributesToSkip = FileAttributes.ReparsePoint,
 				IgnoreInaccessible = true,
-			});
+			})
+			.Where(p => p.EndsWith(TempFileSuffix, StringComparison.OrdinalIgnoreCase));
 		}
 		catch (Exception ex)
 		{
@@ -63,15 +61,14 @@ public class RecursivePdfCompressor
 		return count;
 	}
 
-	private static IEnumerable<string> EnumeratePdfs(string root)
-	{
-		return Directory.EnumerateFiles(root, "*.pdf", new EnumerationOptions
+	private static IEnumerable<string> EnumeratePdfs(string root) =>
+		Directory.EnumerateFiles(root, "*.pdf", new EnumerationOptions
 		{
 			RecurseSubdirectories = true,
 			AttributesToSkip = FileAttributes.ReparsePoint,
 			IgnoreInaccessible = true,
-		});
-	}
+		})
+		.Where(p => Path.GetExtension(p).Equals(".pdf", StringComparison.OrdinalIgnoreCase));
 
 	private static void CompressSingleFileInPlace(string originalPath, string ghostscriptPath, CompressionStats stats)
 	{
@@ -103,11 +100,10 @@ public class RecursivePdfCompressor
 				return;
 			}
 
-			int exitCode;
-			string errorOutput;
+			GhostscriptResult result;
 			try
 			{
-				(exitCode, errorOutput) = RunGhostscript(ghostscriptPath, originalPath, tempPath);
+				result = GhostscriptRunner.Compress(ghostscriptPath, originalPath, tempPath);
 			}
 			catch (Exception ex)
 			{
@@ -117,30 +113,32 @@ public class RecursivePdfCompressor
 				return;
 			}
 
-			if (errorOutput.Contains("This file requires a password for access", StringComparison.InvariantCultureIgnoreCase))
+			if (result.PasswordProtected)
 			{
 				Console.WriteLine("PDF is password-protected; keeping original.");
 				stats.SkippedEncrypted++;
 				return;
 			}
 
-			if (exitCode != 0)
+			if (!result.Succeeded)
 			{
-				Console.WriteLine($"Ghostscript exited with code {exitCode}.");
-				if (!string.IsNullOrWhiteSpace(errorOutput))
-					Console.WriteLine($"Stderr: {errorOutput}");
+				if (result.TimedOut)
+					Console.WriteLine("Ghostscript timed out.");
+				else
+					Console.WriteLine($"Ghostscript exited with code {result.ExitCode}.");
+				if (!string.IsNullOrWhiteSpace(result.StandardError))
+					Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
 				stats.Errored++;
-				stats.ErrorDetails.Add((originalPath, $"ghostscript exit code {exitCode}: {Truncate(errorOutput, 200)}"));
+				stats.ErrorDetails.Add((originalPath,
+					result.TimedOut
+						? "ghostscript timed out"
+						: $"ghostscript exit code {result.ExitCode}: {Truncate(result.StandardError, 200)}"));
 				return;
 			}
 
-			if (!string.IsNullOrWhiteSpace(errorOutput))
-			{
-				Console.WriteLine($"Ghostscript produced unexpected stderr: {errorOutput}");
-				stats.Errored++;
-				stats.ErrorDetails.Add((originalPath, $"ghostscript stderr: {Truncate(errorOutput, 200)}"));
-				return;
-			}
+			// Exit code 0 but with stderr output: treat as informational (font substitutions, etc.).
+			if (!string.IsNullOrWhiteSpace(result.StandardError))
+				Console.WriteLine($"Ghostscript notes: {Truncate(result.StandardError, 200)}");
 
 			if (!File.Exists(tempPath))
 			{
@@ -159,7 +157,7 @@ public class RecursivePdfCompressor
 				return;
 			}
 
-			if (!IsValidPdfStructure(tempPath))
+			if (!GhostscriptRunner.IsValidPdfStructure(tempPath))
 			{
 				Console.WriteLine("Output file failed PDF structural validation.");
 				stats.Errored++;
@@ -248,57 +246,6 @@ public class RecursivePdfCompressor
 		return false;
 	}
 
-	private static (int exitCode, string errorOutput) RunGhostscript(string ghostscriptPath, string inputPath, string outputPath)
-	{
-		var psi = new ProcessStartInfo
-		{
-			FileName = ghostscriptPath,
-			Arguments = $"-sDEVICE=pdfwrite -dCompatibilityLevel=1.7 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=\"{outputPath}\" \"{inputPath}\"",
-			UseShellExecute = false,
-			CreateNoWindow = true,
-			RedirectStandardError = true,
-		};
-
-		using var process = Process.Start(psi);
-		if (process == null)
-			throw new InvalidOperationException("Failed to start Ghostscript process.");
-
-		string errorOutput = process.StandardError.ReadToEnd();
-		process.WaitForExit();
-		return (process.ExitCode, errorOutput);
-	}
-
-	private static bool IsValidPdfStructure(string path)
-	{
-		try
-		{
-			using var stream = File.OpenRead(path);
-
-			Span<byte> headerBuffer = stackalloc byte[5];
-			int read = stream.Read(headerBuffer);
-			if (read < 5)
-				return false;
-			if (headerBuffer[0] != (byte)'%' ||
-				headerBuffer[1] != (byte)'P' ||
-				headerBuffer[2] != (byte)'D' ||
-				headerBuffer[3] != (byte)'F' ||
-				headerBuffer[4] != (byte)'-')
-				return false;
-
-			long length = stream.Length;
-			int tailSize = (int)Math.Min(1024, length);
-			stream.Seek(-tailSize, SeekOrigin.End);
-			byte[] tailBuffer = new byte[tailSize];
-			int tailRead = stream.Read(tailBuffer, 0, tailSize);
-			string tail = Encoding.ASCII.GetString(tailBuffer, 0, tailRead);
-			return tail.Contains("%%EOF");
-		}
-		catch
-		{
-			return false;
-		}
-	}
-
 	private static string Truncate(string s, int maxLen)
 	{
 		if (string.IsNullOrEmpty(s))
@@ -338,9 +285,7 @@ public class RecursivePdfCompressor
 			Console.WriteLine();
 			Console.WriteLine("Errored files:");
 			foreach (var (path, reason) in stats.ErrorDetails)
-			{
 				Console.WriteLine($"  {path}  —  {reason}");
-			}
 		}
 	}
 

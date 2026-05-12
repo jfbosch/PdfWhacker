@@ -9,7 +9,7 @@ if (args.Length == 0)
 switch (args[0])
 {
 	case "watch":
-		return await RunWatchMode(args);
+		return RunWatchMode(args);
 	case "compress":
 		return RunCompressMode(args);
 	default:
@@ -58,7 +58,7 @@ static int RunCompressMode(string[] args)
 	return new RecursivePdfCompressor().CompressTree(directoryPath, ghostscriptExecutablePath);
 }
 
-static async Task<int> RunWatchMode(string[] args)
+static int RunWatchMode(string[] args)
 {
 	if (args.Length < 3)
 	{
@@ -71,7 +71,8 @@ static async Task<int> RunWatchMode(string[] args)
 
 	if (!File.Exists(ghostscriptExecutablePath))
 	{
-		throw new FileNotFoundException("Ghostscript executable not found.", ghostscriptExecutablePath);
+		Console.WriteLine($"Ghostscript executable not found: {ghostscriptExecutablePath}");
+		return 1;
 	}
 
 	MigrateOldFolder(Path.Combine(workingFolderPath, "CompressionOriginal"), Path.Combine(workingFolderPath, "Original", "Compression"));
@@ -87,23 +88,41 @@ static async Task<int> RunWatchMode(string[] args)
 	Directory.CreateDirectory(compressionProcessedFolderPath);
 	Directory.CreateDirectory(compressionOutputFolderPath);
 
-	foreach (var filePath in Directory.EnumerateFiles(compressionInputFolderPath, "*.pdf"))
+	// Serialize all compression work onto a single worker so a flurry of dropped
+	// files doesn't spawn N concurrent Ghostscript processes and shred the box.
+	var compressionQueue = new System.Collections.Concurrent.BlockingCollection<string>();
+	var compressionWorker = new Thread(() =>
 	{
-		new PdfCompressor().CompressFile(filePath, compressionOutputFolderPath, compressionProcessedFolderPath, ghostscriptExecutablePath);
-	}
+		var compressor = new PdfCompressor();
+		foreach (var filePath in compressionQueue.GetConsumingEnumerable())
+		{
+			try
+			{
+				compressor.CompressFile(filePath, compressionOutputFolderPath, compressionProcessedFolderPath, ghostscriptExecutablePath);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Compression worker error for '{filePath}': {ex.Message}");
+			}
+		}
+	})
+	{ IsBackground = true, Name = "PdfWhacker-Compression" };
+	compressionWorker.Start();
+
+	foreach (var filePath in EnumeratePdfs(compressionInputFolderPath))
+		compressionQueue.Add(filePath);
 
 	var compressionFileWatcher = new FileSystemWatcher(compressionInputFolderPath)
 	{
 		NotifyFilter = NotifyFilters.FileName,
 		Filter = "*.pdf"
 	};
-
 	compressionFileWatcher.Created += (sender, e) =>
 	{
-		e.FullPath.WaitForFileToBeReady();
-		new PdfCompressor().CompressFile(e.FullPath, compressionOutputFolderPath, compressionProcessedFolderPath, ghostscriptExecutablePath);
+		if (!Path.GetExtension(e.FullPath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+			return;
+		compressionQueue.Add(e.FullPath);
 	};
-
 	compressionFileWatcher.EnableRaisingEvents = true;
 
 	// PDF Merge
@@ -121,59 +140,90 @@ static async Task<int> RunWatchMode(string[] args)
 		NotifyFilter = NotifyFilters.FileName,
 		Filter = "*.pdf"
 	};
-
 	mergeFileWatcher.Created += (sender, e) =>
 	{
-		e.FullPath.WaitForFileToBeReady();
-		string fileName = Path.GetFileName(e.FullPath);
-		string folderPath = Directory.GetParent(e.FullPath).FullName;
-		var files = Directory.EnumerateFiles(folderPath, "*.pdf").ToArray();
-		Console.WriteLine($"{fileName} --- available to merge. Total files to merge: {files.Length}");
+		try
+		{
+			if (!Path.GetExtension(e.FullPath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+				return;
+			string fileName = Path.GetFileName(e.FullPath);
+			int count = EnumeratePdfs(mergeInputFolderPath).Count();
+			Console.WriteLine($"{fileName} --- available to merge. Total files to merge: {count}");
+		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"Merge watcher error: {ex.Message}");
+		}
 	};
-
 	mergeFileWatcher.EnableRaisingEvents = true;
+
+	// Capture Ctrl-C as a keypress instead of letting the runtime kill us mid-compression.
+	bool canInterceptCtrlC = true;
+	try { Console.TreatControlCAsInput = true; }
+	catch (IOException) { canInterceptCtrlC = false; } // e.g. redirected stdin
 
 	PromptUser();
 
-	bool exitApp = false;
-	while (!exitApp)
+	while (true)
 	{
-		if (Console.KeyAvailable)
+		ConsoleKeyInfo key;
+		try
 		{
-			string? line = Console.ReadLine();
-			switch (line)
-			{
-				case "m":
-					new PdfMerger().MergeFiles(mergeInputFolderPath, mergeOutputFolderPath, mergeProcessedFolderPath, ghostscriptExecutablePath);
-					PromptUser();
-					break;
-
-				case "q":
-				case "Q":
-					exitApp = true;
-					break;
-
-				default:
-					PromptUser();
-					break;
-			}
+			key = Console.ReadKey(intercept: true);
 		}
-		await Task.Delay(1000);
+		catch (InvalidOperationException)
+		{
+			// Console input is redirected; fall back to a blocking line read.
+			string? line = Console.ReadLine();
+			if (line is null) break;
+			char c = line.Length > 0 ? line[0] : '\0';
+			if (c == 'q' || c == 'Q') break;
+			if (c == 'm' || c == 'M') new PdfMerger().MergeFiles(mergeInputFolderPath, mergeOutputFolderPath, mergeProcessedFolderPath, ghostscriptExecutablePath);
+			PromptUser();
+			continue;
+		}
+
+		if (canInterceptCtrlC && key.Key == ConsoleKey.C && (key.Modifiers & ConsoleModifiers.Control) != 0)
+		{
+			Console.WriteLine();
+			Console.WriteLine("Ctrl-C received; shutting down...");
+			break;
+		}
+
+		if (key.KeyChar == 'q' || key.KeyChar == 'Q')
+			break;
+
+		if (key.KeyChar == 'm' || key.KeyChar == 'M')
+			new PdfMerger().MergeFiles(mergeInputFolderPath, mergeOutputFolderPath, mergeProcessedFolderPath, ghostscriptExecutablePath);
+
+		PromptUser();
 	}
+
+	if (canInterceptCtrlC)
+	{
+		try { Console.TreatControlCAsInput = false; } catch (IOException) { /* ignore */ }
+	}
+
+	compressionQueue.CompleteAdding();
+	compressionFileWatcher.Dispose();
+	mergeFileWatcher.Dispose();
+	compressionWorker.Join(TimeSpan.FromSeconds(5));
 
 	return 0;
 
 	void PromptUser()
 	{
-		Console.WriteLine("");
-		Console.WriteLine("Watching for new PDF files in input folders under" + Path.GetFullPath(workingFolderPath));
-
-		var filesToMerge = Directory.EnumerateFiles(mergeInputFolderPath, "*.pdf").ToArray();
-		Console.WriteLine($"Press (m) to merge any available files. {filesToMerge.Length} available.");
-
-		Console.WriteLine("Press (q) )to quit.");
+		Console.WriteLine();
+		Console.WriteLine($"Watching for new PDF files in input folders under {Path.GetFullPath(workingFolderPath)}");
+		int count = EnumeratePdfs(mergeInputFolderPath).Count();
+		Console.WriteLine($"Press (m) to merge any available files. {count} available.");
+		Console.WriteLine("Press (q) to quit.");
 	}
 }
+
+static IEnumerable<string> EnumeratePdfs(string folder) =>
+	Directory.EnumerateFiles(folder, "*.pdf")
+		.Where(p => Path.GetExtension(p).Equals(".pdf", StringComparison.OrdinalIgnoreCase));
 
 static void MigrateOldFolder(string oldFolder, string newFolder)
 {
@@ -198,10 +248,12 @@ static void MigrateOldFolder(string oldFolder, string newFolder)
 		moved++;
 	}
 
-	string suffix = skipped > 0 ? $" ({skipped} skipped due to existing files)" : "";
-	Console.WriteLine($"Migrated {moved} file(s) from '{oldFolder}' to '{newFolder}'{suffix}.");
+	if (moved > 0 || skipped > 0)
+	{
+		string suffix = skipped > 0 ? $" ({skipped} skipped due to existing files)" : "";
+		Console.WriteLine($"Migrated {moved} file(s) from '{oldFolder}' to '{newFolder}'{suffix}.");
+	}
 
-	bool isEmpty = !Directory.EnumerateFileSystemEntries(oldFolder).Any();
-	if (isEmpty)
+	if (!Directory.EnumerateFileSystemEntries(oldFolder).Any())
 		Directory.Delete(oldFolder);
 }

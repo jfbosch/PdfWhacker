@@ -1,11 +1,8 @@
-﻿using System.Diagnostics;
-
 namespace PdfWhacker;
 
 public class PdfMerger
 {
-	public void MergeFiles
-	(
+	public void MergeFiles(
 		string inputFolderPath,
 		string outputFolderPath,
 		string processedOriginalFolderPath,
@@ -19,77 +16,98 @@ public class PdfMerger
 				return;
 			}
 
-			var filesToMerge = Directory.EnumerateFiles(inputFolderPath, "*.pdf").ToArray();
+			var filesToMerge = EnumeratePdfs(inputFolderPath).ToArray();
 			if (filesToMerge.Length < 2)
 			{
 				Console.WriteLine($"A minimum of 2 files are needed before they can be merged. Found {filesToMerge.Length} in {inputFolderPath}");
 				return;
 			}
 
-			string outputFilePath = Path.Combine(outputFolderPath, "merged.pdf");
+			string outputFileName = $"merged-{DateTime.Now:yyyyMMdd-HHmmss}.pdf";
+			string outputFilePath = Path.Combine(outputFolderPath, outputFileName);
 
-			Console.WriteLine("");
+			Console.WriteLine();
 			Console.WriteLine("-------------------------");
-			Console.WriteLine($"Merging files:");
+			Console.WriteLine("Merging files:");
+			foreach (var filePath in filesToMerge)
+				Console.WriteLine($"  {Path.GetFileName(filePath)}");
+
+			GhostscriptResult result;
+			try
+			{
+				result = GhostscriptRunner.Merge(ghostscriptPath, filesToMerge, outputFilePath);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Ghostscript invocation failed: {ex.Message}");
+				return;
+			}
+
+			if (result.PasswordProtected)
+			{
+				Console.WriteLine("Unable to merge because one of the PDF files is password protected; leaving things as is.");
+				SafeDelete(outputFilePath);
+				return;
+			}
+
+			if (!result.Succeeded)
+			{
+				Console.WriteLine(result.TimedOut
+					? "Ghostscript timed out; leaving things as is."
+					: $"Ghostscript exited with code {result.ExitCode}; leaving things as is.");
+				if (!string.IsNullOrWhiteSpace(result.StandardError))
+					Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
+				SafeDelete(outputFilePath);
+				return;
+			}
+
+			if (!File.Exists(outputFilePath) || !GhostscriptRunner.IsValidPdfStructure(outputFilePath))
+			{
+				Console.WriteLine("Merge output missing or failed structural validation; leaving things as is.");
+				SafeDelete(outputFilePath);
+				return;
+			}
+
+			long mergedSize = new FileInfo(outputFilePath).Length;
+			Console.WriteLine($"Merged {filesToMerge.Length} files into {outputFileName}. Size: {mergedSize:N0} bytes.");
+
+			// Only after a successful merge do we archive originals and clean inputs.
 			foreach (var filePath in filesToMerge)
 			{
 				string fileName = Path.GetFileName(filePath);
-				Console.WriteLine($"	{fileName}");
-				string processedOriginalFilePath = Path.Combine(processedOriginalFolderPath, fileName);
-				File.Copy(filePath, processedOriginalFilePath, true);
-			}
-
-
-			bool pdfIsPasswordProtected = false;
-
-			// Concatenate all file paths from filesToMerge array into a single string
-			string inputFiles = string.Join(" ", filesToMerge.Select(file => $"\"{file}\""));
-
-			// Set up and start the Ghostscript process
-			ProcessStartInfo psi = new ProcessStartInfo
-			{
-				FileName = ghostscriptPath,
-				Arguments = $"-dNOPAUSE -sDEVICE=pdfwrite -sOutputFile=\"{outputFilePath}\" -dBATCH {inputFiles}",
-				UseShellExecute = false,
-				CreateNoWindow = true,
-				RedirectStandardError = true,
-			};
-
-			using (Process mergeProcess = Process.Start(psi))
-			{
-				string errorOutput = mergeProcess.StandardError.ReadToEnd();
-
-				if (!string.IsNullOrEmpty(errorOutput))
+				string archivePath = Path.Combine(processedOriginalFolderPath, fileName);
+				try
 				{
-					Console.WriteLine($"Error: {errorOutput}");
-					if (errorOutput.Contains("This file requires a password for access", StringComparison.InvariantCultureIgnoreCase))
-						pdfIsPasswordProtected = true;
-				}
-				mergeProcess.WaitForExit();
-			}
-
-			if (pdfIsPasswordProtected)
-			{
-				Console.WriteLine("Unable to merge because one of the PDF files is password protected; leaving things as is.");
-				return;
-			}
-			else if (!File.Exists(outputFilePath))
-			{
-				Console.WriteLine("Unable to merge due to unexpected error; leaving things as is.");
-				return;
-			}
-
-			var mergedSize = new FileInfo(outputFilePath).Length;
-			Console.WriteLine($"Merged {filesToMerge.Length} files into {Path.GetFileName(outputFilePath)}. Size: {mergedSize} bytes.");
-
-			foreach (var filePath in filesToMerge)
-				if (File.Exists(filePath))
+					File.Copy(filePath, archivePath, overwrite: true);
 					File.Delete(filePath);
+				}
+				catch (Exception ex)
+				{
+					Console.WriteLine($"Failed to archive/remove '{fileName}': {ex.Message}");
+				}
+			}
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"Error processing file  for merge {Path.GetFileName(inputFolderPath)}");
-			Console.WriteLine($"Stack Trace: {ex.ToString()}");
+			Console.WriteLine($"Error processing merge in {inputFolderPath}");
+			Console.WriteLine($"Stack trace: {ex}");
+		}
+	}
+
+	private static IEnumerable<string> EnumeratePdfs(string folder) =>
+		Directory.EnumerateFiles(folder, "*.pdf")
+			.Where(p => Path.GetExtension(p).Equals(".pdf", StringComparison.OrdinalIgnoreCase));
+
+	private static void SafeDelete(string path)
+	{
+		try
+		{
+			if (File.Exists(path))
+				File.Delete(path);
+		}
+		catch
+		{
+			// best effort
 		}
 	}
 }
