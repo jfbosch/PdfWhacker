@@ -11,6 +11,7 @@ Compress PDFs:
 
 - Watches the CompressionInput directory for new PDF files and compresses them automatically into the Output directory.
 - Compresses existing PDF files in the CompressionInput directory on startup, if there are any.
+- One-shot recursive form: `PdfWhacker compress <directoryPath> <ghostscriptExecutablePath>` compresses every PDF under `<directoryPath>` in place. Originals are only replaced when compression succeeds and meets the minimum size-reduction threshold; timestamps are preserved.
 
 
 Decrypt PDFs:
@@ -24,7 +25,7 @@ Decrypt PDFs:
 Merge PDFs
 
 - Watches the MergeInput directory for new PDF files to be merged and prints the found files to the console.
-- Once all files are found, press `m` then Enter to merge them all. The merged file is written to the Output directory as `merged-<timestamp>.pdf` (so prior merges are never overwritten).
+- Once all files are found, press `m` then Enter to merge them all. The merged file is written to the Output directory as `merged-<timestamp>.pdf` (millisecond-precision timestamp with a numeric collision suffix, so prior merges are never overwritten).
 - Merges existing PDF files in the MergeInput directory on startup, if there are any.
 
 General.
@@ -33,19 +34,19 @@ General.
 
 ## Usage
 
-The application requires two command-line arguments:
-
-- The path to the working folder.
-- The path to the Ghostscript executable.
-
-Here is an example of how to run the application:
+PdfWhacker is invoked with a subcommand. There are three:
 
 ```
-PdfWhacker.exe <working folder path> <ghostscript executable path>
+PdfWhacker watch    <workingFolderPath> <ghostscriptExecutablePath>
+PdfWhacker compress <directoryPath>     <ghostscriptExecutablePath>
+PdfWhacker decrypt  <directoryPath>     <ghostscriptExecutablePath>
 ```
 
+- **`watch`** — Long-running mode. Watches `<workingFolderPath>/CompressionInput`, `<workingFolderPath>/DecryptInput`, and `<workingFolderPath>/MergeInput` for PDFs and produces output in `<workingFolderPath>/Output`. Press `m` then Enter to trigger a merge, `q` then Enter (or Ctrl-C) to quit.
+- **`compress`** — One-shot mode. Recursively compresses every PDF under `<directoryPath>` in place.
+- **`decrypt`** — One-shot mode. Recursively decrypts every password-protected PDF under `<directoryPath>` in place using passwords from `appsettings.json` next to the executable.
 
-The working directory will contain the following subdirectories:
+The watch-mode working directory will contain the following subdirectories:
 
 - CompressionInput: The application watches this directory for new PDF files to compress.
 - DecryptInput: The application watches this directory for new password-protected PDF files to decrypt.
@@ -56,6 +57,10 @@ The working directory will contain the following subdirectories:
 - Output: The application saves compressed, decrypted (using their original filenames), and merged PDF files (named `merged-<timestamp>.pdf`) in this directory.
 
 If these directories do not exist, the application creates them.
+
+`Output` is shared by both the compression and decryption pipelines. If the same filename appears in both `CompressionInput` and `DecryptInput`, the later run will overwrite the earlier output. Rename one ahead of time if you need to keep both.
+
+The `Original/*` folders are not pruned by PdfWhacker — they accumulate everything you've processed. Periodically clear them out (or rotate them to cold storage) if disk usage matters.
 
 If you ran an older version of PdfWhacker, the legacy `CompressionOriginal`, `CompressionOutput`, `MergeOriginal`, and `MergeOutput` folders are migrated automatically into the new structure on startup. Files whose names already exist at the destination are left in place so nothing is silently overwritten.
 
@@ -91,7 +96,15 @@ Candidate passwords live in `appsettings.json` next to the `PdfWhacker` executab
 }
 ```
 
-Every locked PDF is attempted against each password in this list, in order. If the file is missing, contains an empty list, or fails to parse, a warning is printed at startup and the system continues — only owner-password-only PDFs will then be decryptable. Passwords are never echoed to the console.
+Every locked PDF is attempted against each password in this list, in order. If the file is missing, contains an empty list, or fails to parse, a warning is printed at startup and the system continues — only owner-password-only PDFs will then be decryptable.
+
+### Password handling — security caveat
+
+Passwords are not echoed to stdout. However, each decryption attempt invokes Ghostscript with `-sPDFPassword=<plaintext>` as a command-line argument, which means **the plaintext password is briefly visible to any process on the same machine that can enumerate child process command lines** (Task Manager's "Command line" column, `Get-CimInstance Win32_Process | select CommandLine`, Process Explorer, etc.). Anyone with local execution rights on the box can read passwords while a decrypt is in flight.
+
+The on-disk copy in `appsettings.json` is protected only by file ACLs. PdfWhacker does not encrypt it.
+
+If your threat model includes other local users, do not store sensitive passwords in `appsettings.json` and prefer compressing/merging only — leave decryption for systems where you control all local accounts.
 
 ## Requirements
 

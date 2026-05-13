@@ -40,7 +40,7 @@ public class PdfDecryptor
 			{
 				Console.WriteLine("PDF is not encrypted; passing original through.");
 				PassOriginalThrough(processedOriginalFilePath, outputFilePath);
-				DeleteIfExists(inputFilePath);
+				PdfFs.SafeDelete(inputFilePath);
 				return;
 			}
 
@@ -58,43 +58,50 @@ public class PdfDecryptor
 				{
 					Console.WriteLine($"Ghostscript invocation failed: {ex.Message}");
 					PassOriginalThrough(processedOriginalFilePath, outputFilePath, "ghostscript invocation failed");
-					DeleteIfExists(inputFilePath);
+					PdfFs.SafeDelete(inputFilePath);
 					return;
 				}
 
-				if (result.PasswordProtected)
-					continue;
-
-				if (!result.Succeeded)
+				var outcome = PdfPipeline.Classify(result, outputFilePath);
+				switch (outcome)
 				{
-					Console.WriteLine(result.TimedOut
-						? "Ghostscript timed out; passing original through."
-						: $"Ghostscript exited with code {result.ExitCode}; passing original through.");
-					if (!string.IsNullOrWhiteSpace(result.StandardError))
-						Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
-					PassOriginalThrough(processedOriginalFilePath, outputFilePath);
-					DeleteIfExists(inputFilePath);
-					return;
-				}
+					case GhostscriptOutcome.EncryptedNoMatch:
+						continue; // try next password
 
-				if (!File.Exists(outputFilePath) || !GhostscriptRunner.IsValidPdfStructure(outputFilePath))
-				{
-					Console.WriteLine("Ghostscript output missing or failed structural validation; passing original through.");
-					PassOriginalThrough(processedOriginalFilePath, outputFilePath);
-					DeleteIfExists(inputFilePath);
-					return;
-				}
+					case GhostscriptOutcome.TimedOut:
+						Console.WriteLine("Ghostscript timed out; passing original through.");
+						PassOriginalThrough(processedOriginalFilePath, outputFilePath);
+						PdfFs.SafeDelete(inputFilePath);
+						return;
 
-				Console.WriteLine(string.IsNullOrEmpty(password)
-					? "Decrypted with no password (owner-only encryption)."
-					: $"Decrypted on attempt {triedCount}.");
-				DeleteIfExists(inputFilePath);
-				return;
+					case GhostscriptOutcome.Failed:
+						Console.WriteLine($"Ghostscript exited with code {result.ExitCode}; passing original through.");
+						if (!string.IsNullOrWhiteSpace(result.StandardError))
+							Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
+						PassOriginalThrough(processedOriginalFilePath, outputFilePath);
+						PdfFs.SafeDelete(inputFilePath);
+						return;
+
+					case GhostscriptOutcome.MissingOutput:
+					case GhostscriptOutcome.EmptyOutput:
+					case GhostscriptOutcome.InvalidStructure:
+						Console.WriteLine("Ghostscript output missing or failed structural validation; passing original through.");
+						PassOriginalThrough(processedOriginalFilePath, outputFilePath);
+						PdfFs.SafeDelete(inputFilePath);
+						return;
+
+					case GhostscriptOutcome.Ok:
+						Console.WriteLine(string.IsNullOrEmpty(password)
+							? "Decrypted with no password (owner-only encryption)."
+							: $"Decrypted on attempt {triedCount}.");
+						PdfFs.SafeDelete(inputFilePath);
+						return;
+				}
 			}
 
 			Console.WriteLine($"Tried {triedCount} password(s); none matched. Passing original through.");
 			PassOriginalThrough(processedOriginalFilePath, outputFilePath);
-			DeleteIfExists(inputFilePath);
+			PdfFs.SafeDelete(inputFilePath);
 		}
 		catch (Exception ex)
 		{
@@ -115,11 +122,5 @@ public class PdfDecryptor
 		if (!string.IsNullOrEmpty(reason))
 			Console.WriteLine($"Falling back to original ({reason}).");
 		File.Copy(originalCopyPath, outputFilePath, overwrite: true);
-	}
-
-	private static void DeleteIfExists(string path)
-	{
-		if (File.Exists(path))
-			File.Delete(path);
 	}
 }

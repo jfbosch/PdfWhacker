@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using PdfWhacker;
 
 if (args.Length == 0)
@@ -107,10 +108,10 @@ static int RunWatchMode(string[] args)
 		return 1;
 	}
 
-	MigrateOldFolder(Path.Combine(workingFolderPath, "CompressionOriginal"), Path.Combine(workingFolderPath, "Original", "Compression"));
-	MigrateOldFolder(Path.Combine(workingFolderPath, "MergeOriginal"), Path.Combine(workingFolderPath, "Original", "Merge"));
-	MigrateOldFolder(Path.Combine(workingFolderPath, "CompressionOutput"), Path.Combine(workingFolderPath, "Output"));
-	MigrateOldFolder(Path.Combine(workingFolderPath, "MergeOutput"), Path.Combine(workingFolderPath, "Output"));
+	LegacyFolderMigrator.Migrate(Path.Combine(workingFolderPath, "CompressionOriginal"), Path.Combine(workingFolderPath, "Original", "Compression"));
+	LegacyFolderMigrator.Migrate(Path.Combine(workingFolderPath, "MergeOriginal"), Path.Combine(workingFolderPath, "Original", "Merge"));
+	LegacyFolderMigrator.Migrate(Path.Combine(workingFolderPath, "CompressionOutput"), Path.Combine(workingFolderPath, "Output"));
+	LegacyFolderMigrator.Migrate(Path.Combine(workingFolderPath, "MergeOutput"), Path.Combine(workingFolderPath, "Output"));
 
 	// PDF Compression
 	string compressionInputFolderPath = Path.Combine(workingFolderPath, "CompressionInput");
@@ -122,7 +123,7 @@ static int RunWatchMode(string[] args)
 
 	// Serialize all compression work onto a single worker so a flurry of dropped
 	// files doesn't spawn N concurrent Ghostscript processes and shred the box.
-	var compressionQueue = new System.Collections.Concurrent.BlockingCollection<string>();
+	var compressionQueue = new BlockingCollection<string>();
 	var compressionWorker = new Thread(() =>
 	{
 		var compressor = new PdfCompressor();
@@ -141,13 +142,11 @@ static int RunWatchMode(string[] args)
 	{ IsBackground = true, Name = "PdfWhacker-Compression" };
 	compressionWorker.Start();
 
-	foreach (var filePath in EnumeratePdfs(compressionInputFolderPath))
-		compressionQueue.Add(filePath);
-
 	var compressionFileWatcher = new FileSystemWatcher(compressionInputFolderPath)
 	{
 		NotifyFilter = NotifyFilters.FileName,
-		Filter = "*.pdf"
+		Filter = "*.pdf",
+		InternalBufferSize = 64 * 1024,
 	};
 	compressionFileWatcher.Created += (sender, e) =>
 	{
@@ -155,7 +154,20 @@ static int RunWatchMode(string[] args)
 			return;
 		compressionQueue.Add(e.FullPath);
 	};
+	compressionFileWatcher.Error += (sender, e) =>
+	{
+		var ex = e.GetException();
+		Console.WriteLine($"Compression watcher error (input buffer may have overflowed): {ex.Message}. Re-scanning input folder.");
+		foreach (var filePath in PdfFs.EnumeratePdfs(compressionInputFolderPath, recursive: false))
+			compressionQueue.Add(filePath);
+	};
+	// Enable the watcher BEFORE the initial sweep so any file dropped during
+	// startup is queued by either the sweep or the Created event. The worker
+	// pipeline is idempotent — the input file is deleted on success, so a
+	// brief overlap is harmless.
 	compressionFileWatcher.EnableRaisingEvents = true;
+	foreach (var filePath in PdfFs.EnumeratePdfs(compressionInputFolderPath, recursive: false))
+		compressionQueue.Add(filePath);
 
 	// PDF Decrypt
 	var passwordStore = PasswordStore.LoadFromBaseDirectory();
@@ -167,7 +179,7 @@ static int RunWatchMode(string[] args)
 	Directory.CreateDirectory(decryptProcessedFolderPath);
 	Directory.CreateDirectory(decryptOutputFolderPath);
 
-	var decryptQueue = new System.Collections.Concurrent.BlockingCollection<string>();
+	var decryptQueue = new BlockingCollection<string>();
 	var decryptWorker = new Thread(() =>
 	{
 		var decryptor = new PdfDecryptor();
@@ -186,13 +198,11 @@ static int RunWatchMode(string[] args)
 	{ IsBackground = true, Name = "PdfWhacker-Decryption" };
 	decryptWorker.Start();
 
-	foreach (var filePath in EnumeratePdfs(decryptInputFolderPath))
-		decryptQueue.Add(filePath);
-
 	var decryptFileWatcher = new FileSystemWatcher(decryptInputFolderPath)
 	{
 		NotifyFilter = NotifyFilters.FileName,
-		Filter = "*.pdf"
+		Filter = "*.pdf",
+		InternalBufferSize = 64 * 1024,
 	};
 	decryptFileWatcher.Created += (sender, e) =>
 	{
@@ -200,7 +210,17 @@ static int RunWatchMode(string[] args)
 			return;
 		decryptQueue.Add(e.FullPath);
 	};
+	decryptFileWatcher.Error += (sender, e) =>
+	{
+		var ex = e.GetException();
+		Console.WriteLine($"Decryption watcher error (input buffer may have overflowed): {ex.Message}. Re-scanning input folder.");
+		foreach (var filePath in PdfFs.EnumeratePdfs(decryptInputFolderPath, recursive: false))
+			decryptQueue.Add(filePath);
+	};
+	// See compression-watcher comment above: enable before the initial sweep.
 	decryptFileWatcher.EnableRaisingEvents = true;
+	foreach (var filePath in PdfFs.EnumeratePdfs(decryptInputFolderPath, recursive: false))
+		decryptQueue.Add(filePath);
 
 	// PDF Merge
 	string mergeInputFolderPath = Path.Combine(workingFolderPath, "MergeInput");
@@ -210,12 +230,39 @@ static int RunWatchMode(string[] args)
 	Directory.CreateDirectory(mergeProcessedFolderPath);
 	Directory.CreateDirectory(mergeOutputFolderPath);
 
-	new PdfMerger().MergeFiles(mergeInputFolderPath, mergeOutputFolderPath, mergeProcessedFolderPath, ghostscriptExecutablePath);
+	// Merge runs on its own single-slot worker so a long Ghostscript invocation
+	// can't block the console-key thread (i.e. q / Ctrl-C stay responsive).
+	// Each enqueued item is just a signal — the worker always re-enumerates the
+	// folder on wake-up, so back-to-back `m` presses coalesce naturally.
+	var mergeQueue = new BlockingCollection<object?>();
+	var mergeWorker = new Thread(() =>
+	{
+		var merger = new PdfMerger();
+		foreach (var _ in mergeQueue.GetConsumingEnumerable())
+		{
+			try
+			{
+				merger.MergeFiles(mergeInputFolderPath, mergeOutputFolderPath, mergeProcessedFolderPath, ghostscriptExecutablePath);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Merge worker error: {ex.Message}");
+			}
+		}
+	})
+	{ IsBackground = true, Name = "PdfWhacker-Merge" };
+	mergeWorker.Start();
+
+	// Run the startup merge through the worker so its console output stays
+	// interleaved with the live status prompt the same way the keystroke-driven
+	// merges do.
+	mergeQueue.Add(null);
 
 	var mergeFileWatcher = new FileSystemWatcher(mergeInputFolderPath)
 	{
 		NotifyFilter = NotifyFilters.FileName,
-		Filter = "*.pdf"
+		Filter = "*.pdf",
+		InternalBufferSize = 64 * 1024,
 	};
 	mergeFileWatcher.Created += (sender, e) =>
 	{
@@ -224,13 +271,17 @@ static int RunWatchMode(string[] args)
 			if (!Path.GetExtension(e.FullPath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
 				return;
 			string fileName = Path.GetFileName(e.FullPath);
-			int count = EnumeratePdfs(mergeInputFolderPath).Count();
+			int count = PdfFs.EnumeratePdfs(mergeInputFolderPath, recursive: false).Count();
 			Console.WriteLine($"{fileName} --- available to merge. Total files to merge: {count}");
 		}
 		catch (Exception ex)
 		{
 			Console.WriteLine($"Merge watcher error: {ex.Message}");
 		}
+	};
+	mergeFileWatcher.Error += (sender, e) =>
+	{
+		Console.WriteLine($"Merge watcher error (input buffer may have overflowed): {e.GetException().Message}.");
 	};
 	mergeFileWatcher.EnableRaisingEvents = true;
 
@@ -255,7 +306,7 @@ static int RunWatchMode(string[] args)
 			if (line is null) break;
 			char c = line.Length > 0 ? line[0] : '\0';
 			if (c == 'q' || c == 'Q') break;
-			if (c == 'm' || c == 'M') new PdfMerger().MergeFiles(mergeInputFolderPath, mergeOutputFolderPath, mergeProcessedFolderPath, ghostscriptExecutablePath);
+			if (c == 'm' || c == 'M') mergeQueue.Add(null);
 			PromptUser();
 			continue;
 		}
@@ -271,7 +322,7 @@ static int RunWatchMode(string[] args)
 			break;
 
 		if (key.KeyChar == 'm' || key.KeyChar == 'M')
-			new PdfMerger().MergeFiles(mergeInputFolderPath, mergeOutputFolderPath, mergeProcessedFolderPath, ghostscriptExecutablePath);
+			mergeQueue.Add(null);
 
 		PromptUser();
 	}
@@ -283,11 +334,13 @@ static int RunWatchMode(string[] args)
 
 	compressionQueue.CompleteAdding();
 	decryptQueue.CompleteAdding();
+	mergeQueue.CompleteAdding();
 	compressionFileWatcher.Dispose();
 	decryptFileWatcher.Dispose();
 	mergeFileWatcher.Dispose();
 	compressionWorker.Join(TimeSpan.FromSeconds(5));
 	decryptWorker.Join(TimeSpan.FromSeconds(5));
+	mergeWorker.Join(TimeSpan.FromSeconds(5));
 
 	return 0;
 
@@ -295,45 +348,8 @@ static int RunWatchMode(string[] args)
 	{
 		Console.WriteLine();
 		Console.WriteLine($"Watching for new PDF files in input folders under {Path.GetFullPath(workingFolderPath)}");
-		int count = EnumeratePdfs(mergeInputFolderPath).Count();
+		int count = PdfFs.EnumeratePdfs(mergeInputFolderPath, recursive: false).Count();
 		Console.WriteLine($"Press (m) to merge any available files. {count} available.");
 		Console.WriteLine("Press (q) to quit.");
 	}
-}
-
-static IEnumerable<string> EnumeratePdfs(string folder) =>
-	Directory.EnumerateFiles(folder, "*.pdf")
-		.Where(p => Path.GetExtension(p).Equals(".pdf", StringComparison.OrdinalIgnoreCase));
-
-static void MigrateOldFolder(string oldFolder, string newFolder)
-{
-	if (!Directory.Exists(oldFolder))
-		return;
-
-	Directory.CreateDirectory(newFolder);
-
-	int moved = 0;
-	int skipped = 0;
-	foreach (var sourcePath in Directory.EnumerateFiles(oldFolder))
-	{
-		string fileName = Path.GetFileName(sourcePath);
-		string destPath = Path.Combine(newFolder, fileName);
-		if (File.Exists(destPath))
-		{
-			Console.WriteLine($"Skipping migration of '{fileName}' from '{oldFolder}' — file already exists at '{destPath}'.");
-			skipped++;
-			continue;
-		}
-		File.Move(sourcePath, destPath);
-		moved++;
-	}
-
-	if (moved > 0 || skipped > 0)
-	{
-		string suffix = skipped > 0 ? $" ({skipped} skipped due to existing files)" : "";
-		Console.WriteLine($"Migrated {moved} file(s) from '{oldFolder}' to '{newFolder}'{suffix}.");
-	}
-
-	if (!Directory.EnumerateFileSystemEntries(oldFolder).Any())
-		Directory.Delete(oldFolder);
 }

@@ -16,15 +16,15 @@ public class PdfMerger
 				return;
 			}
 
-			var filesToMerge = EnumeratePdfs(inputFolderPath).ToArray();
+			var filesToMerge = PdfFs.EnumeratePdfs(inputFolderPath, recursive: false).ToArray();
 			if (filesToMerge.Length < 2)
 			{
 				Console.WriteLine($"A minimum of 2 files are needed before they can be merged. Found {filesToMerge.Length} in {inputFolderPath}");
 				return;
 			}
 
-			string outputFileName = $"merged-{DateTime.Now:yyyyMMdd-HHmmss}.pdf";
-			string outputFilePath = Path.Combine(outputFolderPath, outputFileName);
+			string outputFilePath = BuildUniqueMergeOutputPath(outputFolderPath);
+			string outputFileName = Path.GetFileName(outputFilePath);
 
 			Console.WriteLine();
 			Console.WriteLine("-------------------------");
@@ -43,29 +43,32 @@ public class PdfMerger
 				return;
 			}
 
-			if (result.PasswordProtected)
+			var outcome = PdfPipeline.Classify(result, outputFilePath);
+			switch (outcome)
 			{
-				Console.WriteLine("Unable to merge because one of the PDF files is password protected; leaving things as is.");
-				SafeDelete(outputFilePath);
-				return;
-			}
+				case GhostscriptOutcome.EncryptedNoMatch:
+					Console.WriteLine("Unable to merge because one of the PDF files is password protected; leaving things as is.");
+					PdfFs.SafeDelete(outputFilePath);
+					return;
 
-			if (!result.Succeeded)
-			{
-				Console.WriteLine(result.TimedOut
-					? "Ghostscript timed out; leaving things as is."
-					: $"Ghostscript exited with code {result.ExitCode}; leaving things as is.");
-				if (!string.IsNullOrWhiteSpace(result.StandardError))
-					Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
-				SafeDelete(outputFilePath);
-				return;
-			}
+				case GhostscriptOutcome.TimedOut:
+					Console.WriteLine("Ghostscript timed out; leaving things as is.");
+					PdfFs.SafeDelete(outputFilePath);
+					return;
 
-			if (!File.Exists(outputFilePath) || !GhostscriptRunner.IsValidPdfStructure(outputFilePath))
-			{
-				Console.WriteLine("Merge output missing or failed structural validation; leaving things as is.");
-				SafeDelete(outputFilePath);
-				return;
+				case GhostscriptOutcome.Failed:
+					Console.WriteLine($"Ghostscript exited with code {result.ExitCode}; leaving things as is.");
+					if (!string.IsNullOrWhiteSpace(result.StandardError))
+						Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
+					PdfFs.SafeDelete(outputFilePath);
+					return;
+
+				case GhostscriptOutcome.MissingOutput:
+				case GhostscriptOutcome.EmptyOutput:
+				case GhostscriptOutcome.InvalidStructure:
+					Console.WriteLine("Merge output missing or failed structural validation; leaving things as is.");
+					PdfFs.SafeDelete(outputFilePath);
+					return;
 			}
 
 			long mergedSize = new FileInfo(outputFilePath).Length;
@@ -94,20 +97,21 @@ public class PdfMerger
 		}
 	}
 
-	private static IEnumerable<string> EnumeratePdfs(string folder) =>
-		Directory.EnumerateFiles(folder, "*.pdf")
-			.Where(p => Path.GetExtension(p).Equals(".pdf", StringComparison.OrdinalIgnoreCase));
-
-	private static void SafeDelete(string path)
+	private static string BuildUniqueMergeOutputPath(string outputFolderPath)
 	{
-		try
+		// Millisecond precision plus a defensive collision check makes back-to-back
+		// merges (and tests that exercise the same second) safe.
+		string baseStamp = DateTime.Now.ToString("yyyyMMdd-HHmmssfff");
+		string candidate = Path.Combine(outputFolderPath, $"merged-{baseStamp}.pdf");
+		if (!File.Exists(candidate))
+			return candidate;
+		for (int suffix = 2; suffix < 1000; suffix++)
 		{
-			if (File.Exists(path))
-				File.Delete(path);
+			candidate = Path.Combine(outputFolderPath, $"merged-{baseStamp}-{suffix}.pdf");
+			if (!File.Exists(candidate))
+				return candidate;
 		}
-		catch
-		{
-			// best effort
-		}
+		// Astronomically unlikely; fall back to a GUID so we never overwrite.
+		return Path.Combine(outputFolderPath, $"merged-{baseStamp}-{Guid.NewGuid():N}.pdf");
 	}
 }

@@ -111,4 +111,31 @@ public class PdfDecryptorIntegrationTests
 		Assert.True(File.Exists(outputPath), "Decrypted output should exist.");
 		_fx.AssertDecrypted(outputPath);
 	}
+
+	[Fact]
+	public void Missing_ghostscript_binary_passes_original_through()
+	{
+		// Decrypt path exception branch: Process.Start fails, the archived original
+		// must still reach Output and the input must still be removed.
+		var (inputDir, outputDir, archiveDir) = CreateFolders("decrypt-no-gs");
+		string inputPath = _fx.CopyFixture(_fx.UserPwdEncryptedPdf, inputDir, "locked.pdf");
+		string bogusGsPath = Path.Combine(_fx.RootDir, "no-such-ghostscript-" + Guid.NewGuid().ToString("N") + ".exe");
+
+		new PdfDecryptor().DecryptFile(
+			inputPath,
+			outputDir,
+			archiveDir,
+			bogusGsPath,
+			passwords: new[] { IntegrationFixture.KnownUserPassword });
+
+		string outputPath = Path.Combine(outputDir, "locked.pdf");
+		string archivePath = Path.Combine(archiveDir, "locked.pdf");
+
+		Assert.False(File.Exists(inputPath));
+		Assert.True(File.Exists(outputPath));
+		Assert.True(File.Exists(archivePath));
+		Assert.True(_fx.FilesContentEqual(outputPath, _fx.UserPwdEncryptedPdf),
+			"Passthrough should byte-equal the original encrypted fixture.");
+		_fx.AssertStillEncrypted(outputPath);
+	}
 }

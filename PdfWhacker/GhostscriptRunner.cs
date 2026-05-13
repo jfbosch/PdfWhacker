@@ -36,8 +36,8 @@ public static class GhostscriptRunner
 		psi.ArgumentList.Add("-dNOPAUSE");
 		psi.ArgumentList.Add("-dQUIET");
 		psi.ArgumentList.Add("-dBATCH");
-		psi.ArgumentList.Add($"-sOutputFile={outputPath}");
-		psi.ArgumentList.Add(inputPath);
+		psi.ArgumentList.Add($"-sOutputFile={NormalizePath(outputPath)}");
+		psi.ArgumentList.Add(NormalizePath(inputPath));
 		return Run(psi, timeout ?? DefaultTimeout);
 	}
 
@@ -57,8 +57,8 @@ public static class GhostscriptRunner
 		psi.ArgumentList.Add("-dBATCH");
 		if (!string.IsNullOrEmpty(password))
 			psi.ArgumentList.Add($"-sPDFPassword={password}");
-		psi.ArgumentList.Add($"-sOutputFile={outputPath}");
-		psi.ArgumentList.Add(inputPath);
+		psi.ArgumentList.Add($"-sOutputFile={NormalizePath(outputPath)}");
+		psi.ArgumentList.Add(NormalizePath(inputPath));
 		return Run(psi, timeout ?? DefaultTimeout);
 	}
 
@@ -72,9 +72,9 @@ public static class GhostscriptRunner
 		psi.ArgumentList.Add("-sDEVICE=pdfwrite");
 		psi.ArgumentList.Add("-dNOPAUSE");
 		psi.ArgumentList.Add("-dBATCH");
-		psi.ArgumentList.Add($"-sOutputFile={outputPath}");
+		psi.ArgumentList.Add($"-sOutputFile={NormalizePath(outputPath)}");
 		foreach (var input in inputPaths)
-			psi.ArgumentList.Add(input);
+			psi.ArgumentList.Add(NormalizePath(input));
 		return Run(psi, timeout ?? DefaultTimeout);
 	}
 
@@ -108,14 +108,25 @@ public static class GhostscriptRunner
 		}
 	}
 
-	private static ProcessStartInfo BuildBaseStartInfo(string ghostscriptPath) =>
-		new()
+	private static ProcessStartInfo BuildBaseStartInfo(string ghostscriptPath)
+	{
+		var psi = new ProcessStartInfo
 		{
 			FileName = ghostscriptPath,
 			UseShellExecute = false,
 			CreateNoWindow = true,
 			RedirectStandardError = true,
 		};
+		// -dSAFER restricts PostScript file-system access. Default in Ghostscript 10+,
+		// but pass explicitly so older installs are also hardened against malicious PDFs.
+		psi.ArgumentList.Add("-dSAFER");
+		return psi;
+	}
+
+	// Ghostscript has no `--` separator, so a path beginning with `-` would be parsed as
+	// a flag. Forcing an absolute path also avoids relying on the runner's CWD.
+	private static string NormalizePath(string path) =>
+		string.IsNullOrEmpty(path) ? path : Path.GetFullPath(path);
 
 	private static GhostscriptResult Run(ProcessStartInfo psi, TimeSpan timeout)
 	{

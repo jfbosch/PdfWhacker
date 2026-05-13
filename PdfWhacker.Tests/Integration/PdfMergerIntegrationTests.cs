@@ -86,4 +86,35 @@ public class PdfMergerIntegrationTests
 		Assert.Null(ex);
 		Assert.Empty(Directory.GetFiles(outputDir));
 	}
+
+	[Fact]
+	public void Two_back_to_back_merges_produce_two_distinct_outputs_and_overwrite_archives_safely()
+	{
+		// Verifies (a) merge-output filename collision avoidance and (b) that archiving
+		// the same filename twice in a row does not corrupt the archived copy.
+		var (inputDir, outputDir, archiveDir) = CreateFolders("merge-back-to-back");
+
+		// Run 1
+		_fx.CopyFixture(_fx.BasePdf, inputDir, "a.pdf");
+		_fx.CopyFixture(_fx.LargeBasePdf, inputDir, "b.pdf");
+		new PdfMerger().MergeFiles(inputDir, outputDir, archiveDir, _fx.GhostscriptPath);
+
+		Assert.Single(Directory.GetFiles(outputDir, "merged-*.pdf"));
+		Assert.True(File.Exists(Path.Combine(archiveDir, "a.pdf")));
+		Assert.True(File.Exists(Path.Combine(archiveDir, "b.pdf")));
+
+		// Run 2 — same filenames again, but different (swapped) content.
+		_fx.CopyFixture(_fx.LargeBasePdf, inputDir, "a.pdf");
+		_fx.CopyFixture(_fx.BasePdf, inputDir, "b.pdf");
+		new PdfMerger().MergeFiles(inputDir, outputDir, archiveDir, _fx.GhostscriptPath);
+
+		var merges = Directory.GetFiles(outputDir, "merged-*.pdf");
+		Assert.Equal(2, merges.Length);
+		foreach (var m in merges)
+			Assert.True(GhostscriptRunner.IsValidPdfStructure(m), $"Merge output {m} should be a valid PDF.");
+
+		// Archive must reflect the *latest* contents (overwrite is intentional behaviour).
+		Assert.True(_fx.FilesContentEqual(Path.Combine(archiveDir, "a.pdf"), _fx.LargeBasePdf));
+		Assert.True(_fx.FilesContentEqual(Path.Combine(archiveDir, "b.pdf"), _fx.BasePdf));
+	}
 }

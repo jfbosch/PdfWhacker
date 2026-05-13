@@ -79,4 +79,48 @@ public class PdfCompressorIntegrationTests
 		Assert.True(_fx.FilesContentEqual(outputPath, _fx.UserPwdEncryptedPdf),
 			"Encrypted passthrough should be byte-identical to the original locked fixture.");
 	}
+
+	[Fact]
+	public void Invalid_pdf_content_falls_back_to_original()
+	{
+		// Garbage in a .pdf file makes the real Ghostscript exit non-zero; we exercise
+		// the "Ghostscript exited with code N" branch and assert the watch-mode pipeline
+		// copies the archived original back to Output without losing data.
+		var (inputDir, outputDir, archiveDir) = CreateFolders("compress-invalid-pdf");
+		string inputPath = Path.Combine(inputDir, "broken.pdf");
+		const string garbageContent = "this is not actually a pdf, just bytes pretending to be one";
+		File.WriteAllText(inputPath, garbageContent);
+
+		new PdfCompressor().CompressFile(inputPath, outputDir, archiveDir, _fx.GhostscriptPath);
+
+		string outputPath = Path.Combine(outputDir, "broken.pdf");
+		string archivePath = Path.Combine(archiveDir, "broken.pdf");
+
+		Assert.False(File.Exists(inputPath), "Input should be deleted even on Ghostscript failure.");
+		Assert.True(File.Exists(outputPath), "Original should pass through to Output on Ghostscript failure.");
+		Assert.True(File.Exists(archivePath), "Archive copy of the input should remain.");
+		Assert.Equal(garbageContent, File.ReadAllText(outputPath));
+		Assert.Equal(garbageContent, File.ReadAllText(archivePath));
+	}
+
+	[Fact]
+	public void Missing_ghostscript_binary_falls_back_to_original()
+	{
+		// Process.Start throws Win32Exception when the FileName doesn't exist;
+		// PdfCompressor's catch block must still preserve the input data via the
+		// archive copy.
+		var (inputDir, outputDir, archiveDir) = CreateFolders("compress-no-gs");
+		string inputPath = _fx.CopyFixture(_fx.BasePdf, inputDir, "doc.pdf");
+		string bogusGsPath = Path.Combine(_fx.RootDir, "no-such-ghostscript-" + Guid.NewGuid().ToString("N") + ".exe");
+
+		new PdfCompressor().CompressFile(inputPath, outputDir, archiveDir, bogusGsPath);
+
+		string outputPath = Path.Combine(outputDir, "doc.pdf");
+		string archivePath = Path.Combine(archiveDir, "doc.pdf");
+
+		Assert.False(File.Exists(inputPath));
+		Assert.True(File.Exists(outputPath));
+		Assert.True(File.Exists(archivePath));
+		Assert.True(_fx.FilesContentEqual(outputPath, _fx.BasePdf));
+	}
 }
