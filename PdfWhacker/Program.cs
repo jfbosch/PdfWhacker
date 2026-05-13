@@ -49,18 +49,13 @@ static int RunCompressMode(string[] args)
 	}
 
 	string directoryPath = args[1];
-	string ghostscriptExecutablePath = args[2];
-
 	if (!Directory.Exists(directoryPath))
 	{
 		Console.WriteLine($"Directory not found: {directoryPath}");
 		return 1;
 	}
-	if (!File.Exists(ghostscriptExecutablePath))
-	{
-		Console.WriteLine($"Ghostscript executable not found: {ghostscriptExecutablePath}");
+	if (!TryResolveGhostscript(args[2], out string ghostscriptExecutablePath))
 		return 1;
-	}
 
 	return new RecursivePdfCompressor().CompressTree(directoryPath, ghostscriptExecutablePath);
 }
@@ -74,21 +69,27 @@ static int RunDecryptMode(string[] args)
 	}
 
 	string directoryPath = args[1];
-	string ghostscriptExecutablePath = args[2];
-
 	if (!Directory.Exists(directoryPath))
 	{
 		Console.WriteLine($"Directory not found: {directoryPath}");
 		return 1;
 	}
-	if (!File.Exists(ghostscriptExecutablePath))
-	{
-		Console.WriteLine($"Ghostscript executable not found: {ghostscriptExecutablePath}");
+	if (!TryResolveGhostscript(args[2], out string ghostscriptExecutablePath))
 		return 1;
-	}
 
 	var passwordStore = PasswordStore.LoadFromBaseDirectory();
 	return new RecursivePdfDecryptor().DecryptTree(directoryPath, ghostscriptExecutablePath, passwordStore.Passwords);
+}
+
+// Single home for the "does this gs path exist?" check that used to live in three
+// places. Cheap step toward a typed GhostscriptBinary — keeps signatures unchanged.
+static bool TryResolveGhostscript(string candidate, out string path)
+{
+	path = candidate;
+	if (File.Exists(candidate))
+		return true;
+	Console.WriteLine($"Ghostscript executable not found: {candidate}");
+	return false;
 }
 
 static int RunWatchMode(string[] args)
@@ -100,13 +101,10 @@ static int RunWatchMode(string[] args)
 	}
 
 	string workingFolderPath = args[1];
-	string ghostscriptExecutablePath = args[2];
-
-	if (!File.Exists(ghostscriptExecutablePath))
-	{
-		Console.WriteLine($"Ghostscript executable not found: {ghostscriptExecutablePath}");
+	if (!TryResolveGhostscript(args[2], out string ghostscriptExecutablePath))
 		return 1;
-	}
+
+	using var _logScope = FileLogger.Install(Path.Combine(workingFolderPath, "logs"));
 
 	LegacyFolderMigrator.Migrate(Path.Combine(workingFolderPath, "CompressionOriginal"), Path.Combine(workingFolderPath, "Original", "Compression"));
 	LegacyFolderMigrator.Migrate(Path.Combine(workingFolderPath, "MergeOriginal"), Path.Combine(workingFolderPath, "Original", "Merge"));
@@ -341,6 +339,9 @@ static int RunWatchMode(string[] args)
 	compressionWorker.Join(TimeSpan.FromSeconds(5));
 	decryptWorker.Join(TimeSpan.FromSeconds(5));
 	mergeWorker.Join(TimeSpan.FromSeconds(5));
+	compressionQueue.Dispose();
+	decryptQueue.Dispose();
+	mergeQueue.Dispose();
 
 	return 0;
 

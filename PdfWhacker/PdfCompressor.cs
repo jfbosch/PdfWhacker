@@ -24,8 +24,8 @@ public class PdfCompressor
 				return;
 			}
 
-			string outputFilePath = Path.Combine(outputFolderPath, inputFileName);
-			string processedOriginalFilePath = Path.Combine(processedOriginalFolderPath, inputFileName);
+			var (processedOriginalFilePath, outputFilePath) =
+				PdfFs.BuildUniquePathPair(processedOriginalFolderPath, outputFolderPath, inputFileName);
 
 			long originalSize = new FileInfo(inputFilePath).Length;
 			if (originalSize == 0)
@@ -53,35 +53,14 @@ public class PdfCompressor
 			}
 
 			var outcome = PdfPipeline.Classify(result, outputFilePath);
-			switch (outcome)
+			if (WatchOutcomeReporter.TryApplyFallback(
+				outcome, result,
+				archivePath: processedOriginalFilePath,
+				outputPath: outputFilePath,
+				inputPath: inputFilePath,
+				WatchOutcomeReporter.FallbackVerb.CopyToOutput))
 			{
-				case GhostscriptOutcome.EncryptedNoMatch:
-					Console.WriteLine("PDF is password-protected; copying original to output.");
-					CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
-					PdfFs.SafeDelete(inputFilePath);
-					return;
-
-				case GhostscriptOutcome.TimedOut:
-					Console.WriteLine("Ghostscript timed out; copying original to output.");
-					CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
-					PdfFs.SafeDelete(inputFilePath);
-					return;
-
-				case GhostscriptOutcome.Failed:
-					Console.WriteLine($"Ghostscript exited with code {result.ExitCode}; copying original to output.");
-					if (!string.IsNullOrWhiteSpace(result.StandardError))
-						Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
-					CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
-					PdfFs.SafeDelete(inputFilePath);
-					return;
-
-				case GhostscriptOutcome.MissingOutput:
-				case GhostscriptOutcome.EmptyOutput:
-				case GhostscriptOutcome.InvalidStructure:
-					Console.WriteLine("Ghostscript output missing or failed structural validation; copying original to output.");
-					CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
-					PdfFs.SafeDelete(inputFilePath);
-					return;
+				return;
 			}
 
 			long compressedSize = new FileInfo(outputFilePath).Length;

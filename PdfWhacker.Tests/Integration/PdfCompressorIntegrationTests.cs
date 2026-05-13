@@ -31,6 +31,7 @@ public class PdfCompressorIntegrationTests
 		var (inputDir, outputDir, archiveDir) = CreateFolders("compress-large");
 		string inputPath = _fx.CopyFixture(_fx.LargeBasePdf, inputDir, "big.pdf");
 		long originalSize = new FileInfo(inputPath).Length;
+		int originalPageCount = _fx.GetPageCount(_fx.LargeBasePdf);
 
 		new PdfCompressor().CompressFile(inputPath, outputDir, archiveDir, _fx.GhostscriptPath);
 
@@ -45,6 +46,7 @@ public class PdfCompressorIntegrationTests
 		Assert.True(compressedSize < originalSize * 0.95,
 			$"Expected output to be at least 5% smaller than {originalSize} bytes, got {compressedSize} bytes.");
 		Assert.True(GhostscriptRunner.IsValidPdfStructure(outputPath), "Compressed output should be a valid PDF.");
+		Assert.Equal(originalPageCount, _fx.GetPageCount(outputPath));
 	}
 
 	[Fact]
@@ -101,6 +103,29 @@ public class PdfCompressorIntegrationTests
 		Assert.True(File.Exists(archivePath), "Archive copy of the input should remain.");
 		Assert.Equal(garbageContent, File.ReadAllText(outputPath));
 		Assert.Equal(garbageContent, File.ReadAllText(archivePath));
+	}
+
+	[Fact]
+	public void Repeated_same_named_input_does_not_overwrite_prior_archive_or_output()
+	{
+		// Dropping the same filename twice must never clobber the prior original
+		// in Original/Compression, nor the prior compressed copy in Output. The second
+		// pass should land at "name (2).pdf".
+		var (inputDir, outputDir, archiveDir) = CreateFolders("compress-collision");
+
+		string firstInput = _fx.CopyFixture(_fx.BasePdf, inputDir, "dupe.pdf");
+		new PdfCompressor().CompressFile(firstInput, outputDir, archiveDir, _fx.GhostscriptPath);
+
+		string secondInput = _fx.CopyFixture(_fx.LargeBasePdf, inputDir, "dupe.pdf");
+		new PdfCompressor().CompressFile(secondInput, outputDir, archiveDir, _fx.GhostscriptPath);
+
+		Assert.True(File.Exists(Path.Combine(archiveDir, "dupe.pdf")), "First archive should still exist.");
+		Assert.True(File.Exists(Path.Combine(archiveDir, "dupe (2).pdf")), "Second archive should be suffixed.");
+		Assert.True(File.Exists(Path.Combine(outputDir, "dupe.pdf")), "First output should still exist.");
+		Assert.True(File.Exists(Path.Combine(outputDir, "dupe (2).pdf")), "Second output should be suffixed.");
+
+		Assert.True(_fx.FilesContentEqual(Path.Combine(archiveDir, "dupe.pdf"), _fx.BasePdf),
+			"First archive should still match the first input bytes.");
 	}
 
 	[Fact]

@@ -25,6 +25,7 @@ public class RecursivePdfCompressorIntegrationTests
 		string lockedPath = _fx.CopyFixture(_fx.UserPwdEncryptedPdf, subdir, "locked.pdf");
 
 		long bigOriginalSize = new FileInfo(bigPath).Length;
+		int bigOriginalPageCount = _fx.GetPageCount(bigPath);
 		byte[] smallOriginalBytes = File.ReadAllBytes(smallPath);
 		byte[] lockedOriginalBytes = File.ReadAllBytes(lockedPath);
 
@@ -41,6 +42,7 @@ public class RecursivePdfCompressorIntegrationTests
 		Assert.True(bigCompressedSize < bigOriginalSize * 0.95,
 			$"Expected in-place compression to shrink the file below 95% of {bigOriginalSize}, got {bigCompressedSize}.");
 		Assert.True(GhostscriptRunner.IsValidPdfStructure(bigPath));
+		Assert.Equal(bigOriginalPageCount, _fx.GetPageCount(bigPath));
 
 		// Tiny PDF untouched (kept-no-benefit).
 		Assert.Equal(smallOriginalBytes, File.ReadAllBytes(smallPath));

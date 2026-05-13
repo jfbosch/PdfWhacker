@@ -54,6 +54,39 @@ internal static class PdfFs
 	}
 
 	/// <summary>
+	/// Picks paths in <paramref name="archiveFolder"/> and <paramref name="outputFolder"/>
+	/// that don't collide with anything already on disk. Both returned paths share the
+	/// same disambiguating suffix so a "foo (3).pdf" in Output can be matched to the
+	/// archived original by name.
+	///
+	/// Watch mode never loses an original: if the same filename arrives twice, the
+	/// second pass lands at "name (2).pdf" rather than clobbering the first.
+	/// </summary>
+	public static (string archivePath, string outputPath) BuildUniquePathPair(
+		string archiveFolder, string outputFolder, string fileName)
+	{
+		string baseName = Path.GetFileNameWithoutExtension(fileName);
+		string ext = Path.GetExtension(fileName);
+
+		string a = Path.Combine(archiveFolder, fileName);
+		string o = Path.Combine(outputFolder, fileName);
+		if (!File.Exists(a) && !File.Exists(o))
+			return (a, o);
+
+		for (int n = 2; n < 1000; n++)
+		{
+			a = Path.Combine(archiveFolder, $"{baseName} ({n}){ext}");
+			o = Path.Combine(outputFolder, $"{baseName} ({n}){ext}");
+			if (!File.Exists(a) && !File.Exists(o))
+				return (a, o);
+		}
+
+		string guid = Guid.NewGuid().ToString("N");
+		return (Path.Combine(archiveFolder, $"{baseName} ({guid}){ext}"),
+				Path.Combine(outputFolder, $"{baseName} ({guid}){ext}"));
+	}
+
+	/// <summary>
 	/// Polls until <paramref name="filePath"/> can be opened with exclusive read access
 	/// (i.e. no other handle holds it), or returns false after <paramref name="maxAttempts"/>
 	/// attempts spaced <paramref name="delayMs"/> milliseconds apart.

@@ -29,6 +29,8 @@ public class PdfMergerIntegrationTests
 	public void Two_unencrypted_pdfs_merge_into_a_single_valid_output()
 	{
 		var (inputDir, outputDir, archiveDir) = CreateFolders("merge-happy");
+		int aPages = _fx.GetPageCount(_fx.BasePdf);
+		int bPages = _fx.GetPageCount(_fx.LargeBasePdf);
 		string a = _fx.CopyFixture(_fx.BasePdf, inputDir, "a.pdf");
 		string b = _fx.CopyFixture(_fx.LargeBasePdf, inputDir, "b.pdf");
 
@@ -39,6 +41,7 @@ public class PdfMergerIntegrationTests
 		string mergedPath = outputs[0];
 		Assert.True(GhostscriptRunner.IsValidPdfStructure(mergedPath));
 		Assert.False(PdfEncryptionDetector.IsEncrypted(mergedPath));
+		Assert.Equal(aPages + bPages, _fx.GetPageCount(mergedPath));
 
 		// Inputs cleared, originals archived.
 		Assert.False(File.Exists(a));

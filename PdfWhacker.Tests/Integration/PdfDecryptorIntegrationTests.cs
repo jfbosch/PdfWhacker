@@ -113,6 +113,32 @@ public class PdfDecryptorIntegrationTests
 	}
 
 	[Fact]
+	public void Repeated_same_named_input_does_not_overwrite_prior_archive_or_output()
+	{
+		// Same invariant as the compressor: dropping "locked.pdf" twice must preserve
+		// both archived originals and both output copies.
+		var (inputDir, outputDir, archiveDir) = CreateFolders("decrypt-collision");
+
+		string firstInput = _fx.CopyFixture(_fx.UserPwdEncryptedPdf, inputDir, "dupe.pdf");
+		new PdfDecryptor().DecryptFile(
+			firstInput, outputDir, archiveDir, _fx.GhostscriptPath,
+			passwords: new[] { IntegrationFixture.KnownUserPassword });
+
+		string secondInput = _fx.CopyFixture(_fx.OtherUserPwdEncryptedPdf, inputDir, "dupe.pdf");
+		new PdfDecryptor().DecryptFile(
+			secondInput, outputDir, archiveDir, _fx.GhostscriptPath,
+			passwords: new[] { IntegrationFixture.OtherUserPassword });
+
+		Assert.True(File.Exists(Path.Combine(archiveDir, "dupe.pdf")), "First archive should still exist.");
+		Assert.True(File.Exists(Path.Combine(archiveDir, "dupe (2).pdf")), "Second archive should be suffixed.");
+		Assert.True(File.Exists(Path.Combine(outputDir, "dupe.pdf")), "First output should still exist.");
+		Assert.True(File.Exists(Path.Combine(outputDir, "dupe (2).pdf")), "Second output should be suffixed.");
+
+		Assert.True(_fx.FilesContentEqual(Path.Combine(archiveDir, "dupe.pdf"), _fx.UserPwdEncryptedPdf),
+			"First archive should still match the first input bytes.");
+	}
+
+	[Fact]
 	public void Missing_ghostscript_binary_passes_original_through()
 	{
 		// Decrypt path exception branch: Process.Start fails, the archived original

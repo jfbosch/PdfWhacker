@@ -5,6 +5,10 @@ public class RecursivePdfDecryptor
 	private const string TempFileSuffix = ".pdfwhacker.tmp";
 	private const string TempFilePattern = "*" + TempFileSuffix;
 
+	// See RecursivePdfCompressor for rationale on the 60s lock wait.
+	private const int LockWaitAttempts = 240;
+	private const int LockWaitDelayMs = 250;
+
 	public int DecryptTree(string rootDirectory, string ghostscriptPath, IReadOnlyList<string> passwords)
 	{
 		var stats = new DecryptionStats();
@@ -74,7 +78,7 @@ public class RecursivePdfDecryptor
 
 		try
 		{
-			if (!PdfFs.TryWaitForExclusiveAccess(originalPath, maxAttempts: 8, delayMs: 250))
+			if (!PdfFs.TryWaitForExclusiveAccess(originalPath, LockWaitAttempts, LockWaitDelayMs))
 			{
 				Console.WriteLine("File is locked by another process; skipping.");
 				stats.SkippedFileLocked++;
@@ -119,44 +123,16 @@ public class RecursivePdfDecryptor
 				}
 
 				var outcome = PdfPipeline.Classify(result, tempPath);
-				switch (outcome)
+				if (outcome == GhostscriptOutcome.EncryptedNoMatch)
 				{
-					case GhostscriptOutcome.EncryptedNoMatch:
-						PdfFs.SafeDelete(tempPath);
-						continue;
+					PdfFs.SafeDelete(tempPath);
+					continue;
+				}
 
-					case GhostscriptOutcome.TimedOut:
-						Console.WriteLine("Ghostscript timed out.");
-						stats.Errored++;
-						stats.ErrorDetails.Add((originalPath, "ghostscript timed out"));
-						return;
-
-					case GhostscriptOutcome.Failed:
-						Console.WriteLine($"Ghostscript exited with code {result.ExitCode}.");
-						if (!string.IsNullOrWhiteSpace(result.StandardError))
-							Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
-						stats.Errored++;
-						stats.ErrorDetails.Add((originalPath,
-							$"ghostscript exit code {result.ExitCode}: {PdfFs.Truncate(result.StandardError, 200)}"));
-						return;
-
-					case GhostscriptOutcome.MissingOutput:
-						Console.WriteLine("Ghostscript did not produce an output file.");
-						stats.Errored++;
-						stats.ErrorDetails.Add((originalPath, "no output file produced"));
-						return;
-
-					case GhostscriptOutcome.EmptyOutput:
-						Console.WriteLine("Ghostscript produced an empty output file.");
-						stats.Errored++;
-						stats.ErrorDetails.Add((originalPath, "output file is zero bytes"));
-						return;
-
-					case GhostscriptOutcome.InvalidStructure:
-						Console.WriteLine("Output file failed PDF structural validation.");
-						stats.Errored++;
-						stats.ErrorDetails.Add((originalPath, "output file failed PDF structure check"));
-						return;
+				if (RecursiveOutcomeReporter.TryRecordFailure(outcome, result, originalPath,
+					(p, reason) => { stats.Errored++; stats.ErrorDetails.Add((p, reason)); }))
+				{
+					return;
 				}
 
 				// Successful decrypt path.

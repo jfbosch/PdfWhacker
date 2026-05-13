@@ -24,8 +24,8 @@ public class PdfDecryptor
 				return;
 			}
 
-			string outputFilePath = Path.Combine(outputFolderPath, inputFileName);
-			string processedOriginalFilePath = Path.Combine(processedOriginalFolderPath, inputFileName);
+			var (processedOriginalFilePath, outputFilePath) =
+				PdfFs.BuildUniquePathPair(processedOriginalFolderPath, outputFolderPath, inputFileName);
 
 			long originalSize = new FileInfo(inputFilePath).Length;
 			if (originalSize == 0)
@@ -63,40 +63,26 @@ public class PdfDecryptor
 				}
 
 				var outcome = PdfPipeline.Classify(result, outputFilePath);
-				switch (outcome)
+
+				if (outcome == GhostscriptOutcome.EncryptedNoMatch)
+					continue; // try next password
+
+				if (outcome == GhostscriptOutcome.Ok)
 				{
-					case GhostscriptOutcome.EncryptedNoMatch:
-						continue; // try next password
-
-					case GhostscriptOutcome.TimedOut:
-						Console.WriteLine("Ghostscript timed out; passing original through.");
-						PassOriginalThrough(processedOriginalFilePath, outputFilePath);
-						PdfFs.SafeDelete(inputFilePath);
-						return;
-
-					case GhostscriptOutcome.Failed:
-						Console.WriteLine($"Ghostscript exited with code {result.ExitCode}; passing original through.");
-						if (!string.IsNullOrWhiteSpace(result.StandardError))
-							Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
-						PassOriginalThrough(processedOriginalFilePath, outputFilePath);
-						PdfFs.SafeDelete(inputFilePath);
-						return;
-
-					case GhostscriptOutcome.MissingOutput:
-					case GhostscriptOutcome.EmptyOutput:
-					case GhostscriptOutcome.InvalidStructure:
-						Console.WriteLine("Ghostscript output missing or failed structural validation; passing original through.");
-						PassOriginalThrough(processedOriginalFilePath, outputFilePath);
-						PdfFs.SafeDelete(inputFilePath);
-						return;
-
-					case GhostscriptOutcome.Ok:
-						Console.WriteLine(string.IsNullOrEmpty(password)
-							? "Decrypted with no password (owner-only encryption)."
-							: $"Decrypted on attempt {triedCount}.");
-						PdfFs.SafeDelete(inputFilePath);
-						return;
+					Console.WriteLine(string.IsNullOrEmpty(password)
+						? "Decrypted with no password (owner-only encryption)."
+						: $"Decrypted on attempt {triedCount}.");
+					PdfFs.SafeDelete(inputFilePath);
+					return;
 				}
+
+				WatchOutcomeReporter.TryApplyFallback(
+					outcome, result,
+					archivePath: processedOriginalFilePath,
+					outputPath: outputFilePath,
+					inputPath: inputFilePath,
+					WatchOutcomeReporter.FallbackVerb.PassThrough);
+				return;
 			}
 
 			Console.WriteLine($"Tried {triedCount} password(s); none matched. Passing original through.");

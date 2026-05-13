@@ -16,4 +16,8 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PdfWhacker.Tests" />
+  </ItemGroup>
+
 </Project>

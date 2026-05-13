@@ -4,7 +4,11 @@ using PdfWhacker;
 
 namespace PdfWhacker.Tests.Integration;
 
-[CollectionDefinition(nameof(GhostscriptCollection))]
+// DisableParallelization keeps tests in this collection from running concurrently
+// with non-integration tests. The recursive-pipeline tests swap Console.Out to
+// capture summaries, and Console.Out is global — any other test that logs while
+// the capture is active would corrupt the assertions.
+[CollectionDefinition(nameof(GhostscriptCollection), DisableParallelization = true)]
 public sealed class GhostscriptCollection : ICollectionFixture<IntegrationFixture>
 {
 	// Marker only — collection assembly + class fixture wiring per xUnit v3 convention.
@@ -96,6 +100,53 @@ public sealed class IntegrationFixture : IDisposable
 		var bytesA = File.ReadAllBytes(a);
 		var bytesB = File.ReadAllBytes(b);
 		return bytesA.AsSpan().SequenceEqual(bytesB);
+	}
+
+	/// <summary>
+	/// Probes a PDF's page count via Ghostscript's PostScript runtime. Lets tests
+	/// assert that a compressed or merged output preserves content shape — not just
+	/// that the file has %%EOF and parses. Throws if Ghostscript can't open the
+	/// file or returns a non-integer result.
+	/// </summary>
+	public int GetPageCount(string pdfPath)
+	{
+		string psPath = pdfPath.Replace('\\', '/');
+		var psi = new ProcessStartInfo
+		{
+			FileName = GhostscriptPath,
+			UseShellExecute = false,
+			CreateNoWindow = true,
+			RedirectStandardError = true,
+			RedirectStandardOutput = true,
+		};
+		psi.ArgumentList.Add("-q");
+		psi.ArgumentList.Add("-dNODISPLAY");
+		psi.ArgumentList.Add("-dNOSAFER");
+		psi.ArgumentList.Add("-c");
+		psi.ArgumentList.Add($"({psPath}) (r) file runpdfbegin pdfpagecount = quit");
+
+		using var process = Process.Start(psi)
+			?? throw new InvalidOperationException($"Failed to start Ghostscript page-count probe for '{pdfPath}'.");
+
+		var stdoutTask = process.StandardOutput.ReadToEndAsync();
+		var stderrTask = process.StandardError.ReadToEndAsync();
+		if (!process.WaitForExit(30_000))
+		{
+			try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+			throw new InvalidOperationException($"Ghostscript page-count probe timed out for '{pdfPath}'.");
+		}
+		string stdout = stdoutTask.GetAwaiter().GetResult();
+		string stderr = stderrTask.GetAwaiter().GetResult();
+
+		if (process.ExitCode != 0)
+			throw new InvalidOperationException(
+				$"Ghostscript page-count probe failed for '{pdfPath}'. ExitCode={process.ExitCode}\nStdout: {stdout}\nStderr: {stderr}");
+
+		if (!int.TryParse(stdout.Trim(), out int count))
+			throw new InvalidOperationException(
+				$"Ghostscript page-count probe returned non-integer for '{pdfPath}'. Stdout: '{stdout}' Stderr: '{stderr}'");
+
+		return count;
 	}
 
 	private GhostscriptResult ProbeWithGhostscript(string inputPath, string? password)
