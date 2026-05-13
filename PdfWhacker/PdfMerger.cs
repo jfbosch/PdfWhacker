@@ -101,7 +101,10 @@ public class PdfMerger
 	{
 		// Millisecond precision plus a defensive collision check makes back-to-back
 		// merges (and tests that exercise the same second) safe.
-		string baseStamp = DateTime.Now.ToString("yyyyMMdd-HHmmssfff");
+		// UtcNow because local time goes backward during DST fall-back, which produces
+		// merged-* filenames that sort wrong (and could even briefly collide with
+		// pre-rollback names). UTC is monotonic and timezone-independent.
+		string baseStamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff");
 		string candidate = Path.Combine(outputFolderPath, $"merged-{baseStamp}.pdf");
 		if (!File.Exists(candidate))
 			return candidate;

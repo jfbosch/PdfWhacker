@@ -44,7 +44,17 @@ public static class LegacyFolderMigrator
 			Console.WriteLine($"Migrated {moved} file(s) from '{oldFolder}' to '{newFolder}'{suffix}.");
 		}
 
-		if (!Directory.EnumerateFileSystemEntries(oldFolder).Any())
-			Directory.Delete(oldFolder);
+		try
+		{
+			if (!Directory.EnumerateFileSystemEntries(oldFolder).Any())
+				Directory.Delete(oldFolder);
+		}
+		catch (Exception ex)
+		{
+			// TOCTOU: a stray entry (AV, sync client, manual drop) appeared between the
+			// enumerate and the delete, OR the directory became inaccessible. Either way,
+			// crashing on every startup until the user cleans it up is the wrong UX.
+			Console.WriteLine($"Could not remove legacy folder '{oldFolder}': {ex.Message}");
+		}
 	}
 }

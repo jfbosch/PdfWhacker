@@ -92,6 +92,27 @@ static bool TryResolveGhostscript(string candidate, out string path)
 	return false;
 }
 
+// Dedupes the watcher Created event vs. the startup sweep: the same file can be
+// observed by both, and the worker logs a confusing "input not available" line
+// the second time. Returns true when the path is newly tracked, false when a
+// previous Created/sweep already queued it.
+static bool TryEnqueueDistinct(ConcurrentDictionary<string, byte> inFlight, BlockingCollection<string> queue, string path)
+{
+	string key = Path.GetFullPath(path);
+	if (!inFlight.TryAdd(key, 0))
+		return false;
+	try
+	{
+		queue.Add(key);
+		return true;
+	}
+	catch
+	{
+		inFlight.TryRemove(key, out _);
+		throw;
+	}
+}
+
 static int RunWatchMode(string[] args)
 {
 	if (args.Length < 3)
@@ -122,6 +143,7 @@ static int RunWatchMode(string[] args)
 	// Serialize all compression work onto a single worker so a flurry of dropped
 	// files doesn't spawn N concurrent Ghostscript processes and shred the box.
 	var compressionQueue = new BlockingCollection<string>();
+	var compressionInFlight = new ConcurrentDictionary<string, byte>();
 	var compressionWorker = new Thread(() =>
 	{
 		var compressor = new PdfCompressor();
@@ -134,6 +156,10 @@ static int RunWatchMode(string[] args)
 			catch (Exception ex)
 			{
 				Console.WriteLine($"Compression worker error for '{filePath}': {ex.Message}");
+			}
+			finally
+			{
+				compressionInFlight.TryRemove(filePath, out _);
 			}
 		}
 	})
@@ -150,22 +176,21 @@ static int RunWatchMode(string[] args)
 	{
 		if (!Path.GetExtension(e.FullPath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
 			return;
-		compressionQueue.Add(e.FullPath);
+		TryEnqueueDistinct(compressionInFlight, compressionQueue, e.FullPath);
 	};
 	compressionFileWatcher.Error += (sender, e) =>
 	{
 		var ex = e.GetException();
 		Console.WriteLine($"Compression watcher error (input buffer may have overflowed): {ex.Message}. Re-scanning input folder.");
 		foreach (var filePath in PdfFs.EnumeratePdfs(compressionInputFolderPath, recursive: false))
-			compressionQueue.Add(filePath);
+			TryEnqueueDistinct(compressionInFlight, compressionQueue, filePath);
 	};
 	// Enable the watcher BEFORE the initial sweep so any file dropped during
-	// startup is queued by either the sweep or the Created event. The worker
-	// pipeline is idempotent — the input file is deleted on success, so a
-	// brief overlap is harmless.
+	// startup is queued by either the sweep or the Created event. The in-flight
+	// set dedupes the two paths so an existing file is never processed twice.
 	compressionFileWatcher.EnableRaisingEvents = true;
 	foreach (var filePath in PdfFs.EnumeratePdfs(compressionInputFolderPath, recursive: false))
-		compressionQueue.Add(filePath);
+		TryEnqueueDistinct(compressionInFlight, compressionQueue, filePath);
 
 	// PDF Decrypt
 	var passwordStore = PasswordStore.LoadFromBaseDirectory();
@@ -178,6 +203,7 @@ static int RunWatchMode(string[] args)
 	Directory.CreateDirectory(decryptOutputFolderPath);
 
 	var decryptQueue = new BlockingCollection<string>();
+	var decryptInFlight = new ConcurrentDictionary<string, byte>();
 	var decryptWorker = new Thread(() =>
 	{
 		var decryptor = new PdfDecryptor();
@@ -190,6 +216,10 @@ static int RunWatchMode(string[] args)
 			catch (Exception ex)
 			{
 				Console.WriteLine($"Decryption worker error for '{filePath}': {ex.Message}");
+			}
+			finally
+			{
+				decryptInFlight.TryRemove(filePath, out _);
 			}
 		}
 	})
@@ -206,19 +236,19 @@ static int RunWatchMode(string[] args)
 	{
 		if (!Path.GetExtension(e.FullPath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
 			return;
-		decryptQueue.Add(e.FullPath);
+		TryEnqueueDistinct(decryptInFlight, decryptQueue, e.FullPath);
 	};
 	decryptFileWatcher.Error += (sender, e) =>
 	{
 		var ex = e.GetException();
 		Console.WriteLine($"Decryption watcher error (input buffer may have overflowed): {ex.Message}. Re-scanning input folder.");
 		foreach (var filePath in PdfFs.EnumeratePdfs(decryptInputFolderPath, recursive: false))
-			decryptQueue.Add(filePath);
+			TryEnqueueDistinct(decryptInFlight, decryptQueue, filePath);
 	};
 	// See compression-watcher comment above: enable before the initial sweep.
 	decryptFileWatcher.EnableRaisingEvents = true;
 	foreach (var filePath in PdfFs.EnumeratePdfs(decryptInputFolderPath, recursive: false))
-		decryptQueue.Add(filePath);
+		TryEnqueueDistinct(decryptInFlight, decryptQueue, filePath);
 
 	// PDF Merge
 	string mergeInputFolderPath = Path.Combine(workingFolderPath, "MergeInput");
@@ -230,9 +260,11 @@ static int RunWatchMode(string[] args)
 
 	// Merge runs on its own single-slot worker so a long Ghostscript invocation
 	// can't block the console-key thread (i.e. q / Ctrl-C stay responsive).
-	// Each enqueued item is just a signal — the worker always re-enumerates the
-	// folder on wake-up, so back-to-back `m` presses coalesce naturally.
-	var mergeQueue = new BlockingCollection<object?>();
+	// The queue carries no data — items are pure signals; the worker re-enumerates
+	// the input folder on wake-up so back-to-back `m` presses coalesce naturally.
+	// Typed as `byte` (rather than the old `object?`) to make the no-payload nature
+	// obvious without changing semantics.
+	var mergeQueue = new BlockingCollection<byte>();
 	var mergeWorker = new Thread(() =>
 	{
 		var merger = new PdfMerger();
@@ -254,7 +286,7 @@ static int RunWatchMode(string[] args)
 	// Run the startup merge through the worker so its console output stays
 	// interleaved with the live status prompt the same way the keystroke-driven
 	// merges do.
-	mergeQueue.Add(null);
+	mergeQueue.Add(0);
 
 	var mergeFileWatcher = new FileSystemWatcher(mergeInputFolderPath)
 	{
@@ -304,7 +336,7 @@ static int RunWatchMode(string[] args)
 			if (line is null) break;
 			char c = line.Length > 0 ? line[0] : '\0';
 			if (c == 'q' || c == 'Q') break;
-			if (c == 'm' || c == 'M') mergeQueue.Add(null);
+			if (c == 'm' || c == 'M') mergeQueue.Add(0);
 			PromptUser();
 			continue;
 		}
@@ -320,7 +352,7 @@ static int RunWatchMode(string[] args)
 			break;
 
 		if (key.KeyChar == 'm' || key.KeyChar == 'M')
-			mergeQueue.Add(null);
+			mergeQueue.Add(0);
 
 		PromptUser();
 	}
@@ -336,9 +368,14 @@ static int RunWatchMode(string[] args)
 	compressionFileWatcher.Dispose();
 	decryptFileWatcher.Dispose();
 	mergeFileWatcher.Dispose();
-	compressionWorker.Join(TimeSpan.FromSeconds(5));
-	decryptWorker.Join(TimeSpan.FromSeconds(5));
-	mergeWorker.Join(TimeSpan.FromSeconds(5));
+	// 5s used to be too short — a mid-flight Ghostscript run would be ripped at
+	// process exit and leak a temp file. 30s gives a short gs run time to finish
+	// without making 'q' feel broken. Anything longer than 30s is on the user.
+	var workerJoinTimeout = TimeSpan.FromSeconds(30);
+	Console.WriteLine($"Waiting up to {workerJoinTimeout.TotalSeconds:F0}s for in-flight Ghostscript runs to complete...");
+	compressionWorker.Join(workerJoinTimeout);
+	decryptWorker.Join(workerJoinTimeout);
+	mergeWorker.Join(workerJoinTimeout);
 	compressionQueue.Dispose();
 	decryptQueue.Dispose();
 	mergeQueue.Dispose();

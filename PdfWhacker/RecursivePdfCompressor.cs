@@ -172,7 +172,10 @@ public class RecursivePdfCompressor
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"Unexpected error: {ex.Message}");
+			// Match the watch-mode pipelines: log the full exception (stack trace
+			// included) so a recursive run that hits an unexpected error is
+			// debuggable without a re-run under a debugger.
+			Console.WriteLine($"Unexpected error: {ex}");
 			stats.Errored++;
 			stats.ErrorDetails.Add((originalPath, $"unexpected: {ex.Message}"));
 		}

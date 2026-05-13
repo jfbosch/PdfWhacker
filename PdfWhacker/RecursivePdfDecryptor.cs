@@ -130,7 +130,8 @@ public class RecursivePdfDecryptor
 				}
 
 				if (RecursiveOutcomeReporter.TryRecordFailure(outcome, result, originalPath,
-					(p, reason) => { stats.Errored++; stats.ErrorDetails.Add((p, reason)); }))
+					(p, reason) => { stats.Errored++; stats.ErrorDetails.Add((p, reason)); },
+					scrubSecret: password))
 				{
 					return;
 				}
@@ -176,7 +177,7 @@ public class RecursivePdfDecryptor
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"Unexpected error: {ex.Message}");
+			Console.WriteLine($"Unexpected error: {ex}");
 			stats.Errored++;
 			stats.ErrorDetails.Add((originalPath, $"unexpected: {ex.Message}"));
 		}

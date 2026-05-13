@@ -84,12 +84,17 @@ public class PdfDecryptorIntegrationTests
 			_fx.GhostscriptPath,
 			passwords: new[] { "nope1", "nope2", IntegrationFixture.KnownUserPassword });
 
-		string outputPath = Path.Combine(outputDir, "stubborn.pdf");
+		// Failed-decrypt passthrough lands at name.locked.pdf so the user can tell at
+		// a glance in Explorer that the file is still encrypted. The unsuffixed
+		// "stubborn.pdf" path must NOT exist — it would look like a successful decrypt.
+		string lockedOutputPath = Path.Combine(outputDir, "stubborn.locked.pdf");
+		string unsuffixedOutputPath = Path.Combine(outputDir, "stubborn.pdf");
 
 		Assert.False(File.Exists(inputPath), "Input should be removed even when no password matches.");
-		Assert.True(File.Exists(outputPath), "Output file should exist (original passed through).");
-		_fx.AssertStillEncrypted(outputPath);
-		Assert.True(_fx.FilesContentEqual(outputPath, _fx.OtherUserPwdEncryptedPdf), "Passthrough output should be byte-identical to the original locked fixture.");
+		Assert.False(File.Exists(unsuffixedOutputPath), "Unsuffixed output must not exist — it would falsely advertise a decrypt.");
+		Assert.True(File.Exists(lockedOutputPath), "Locked-suffix output should exist (original passed through).");
+		_fx.AssertStillEncrypted(lockedOutputPath);
+		Assert.True(_fx.FilesContentEqual(lockedOutputPath, _fx.OtherUserPwdEncryptedPdf), "Passthrough output should be byte-identical to the original locked fixture.");
 	}
 
 	[Fact]

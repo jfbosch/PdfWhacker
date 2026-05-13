@@ -31,7 +31,8 @@ internal static class WatchOutcomeReporter
 		string archivePath,
 		string outputPath,
 		string inputPath,
-		FallbackVerb verb)
+		FallbackVerb verb,
+		string? scrubSecret = null)
 	{
 		string verbLabel = verb == FallbackVerb.CopyToOutput
 			? "copying original to output"
@@ -53,7 +54,7 @@ internal static class WatchOutcomeReporter
 			case GhostscriptOutcome.Failed:
 				Console.WriteLine($"Ghostscript exited with code {result.ExitCode}; {verbLabel}.");
 				if (!string.IsNullOrWhiteSpace(result.StandardError))
-					Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
+					Console.WriteLine($"Stderr: {Scrub(result.StandardError, scrubSecret).Trim()}");
 				break;
 
 			case GhostscriptOutcome.MissingOutput:
@@ -69,5 +70,15 @@ internal static class WatchOutcomeReporter
 		File.Copy(archivePath, outputPath, overwrite: true);
 		PdfFs.SafeDelete(inputPath);
 		return true;
+	}
+
+	// Defensive: today Ghostscript doesn't echo -sPDFPassword= to stderr, but a
+	// future gs version might. Cheap insurance against the entire password landing
+	// in a console log or a piped redirect.
+	private static string Scrub(string text, string? secret)
+	{
+		if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(secret))
+			return text;
+		return text.Replace(secret, "***");
 	}
 }

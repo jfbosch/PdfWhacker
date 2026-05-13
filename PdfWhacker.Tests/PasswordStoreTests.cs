@@ -65,11 +65,14 @@ public class PasswordStoreTests : IDisposable
 	}
 
 	[Fact]
-	public void Trims_whitespace_and_drops_empty_entries()
+	public void Preserves_leading_and_trailing_whitespace_in_passwords()
 	{
+		// Whitespace inside a password is significant — never silently trim. Pure
+		// whitespace and empty strings are still dropped because they can't be
+		// real passwords (and would shadow the implicit empty-password attempt).
 		string path = WritePasswordsFile("""{ "Passwords": ["  spaced  ", "", "   ", "kept"] }""");
 		var store = PasswordStore.LoadFromFile(path);
-		Assert.Equal(new[] { "spaced", "kept" }, store.Passwords);
+		Assert.Equal(new[] { "  spaced  ", "kept" }, store.Passwords);
 	}
 
 	[Fact]

@@ -24,7 +24,8 @@ internal static class RecursiveOutcomeReporter
 		GhostscriptOutcome outcome,
 		GhostscriptResult result,
 		string originalPath,
-		Action<string, string> recordError)
+		Action<string, string> recordError,
+		string? scrubSecret = null)
 	{
 		switch (outcome)
 		{
@@ -38,11 +39,12 @@ internal static class RecursiveOutcomeReporter
 				return true;
 
 			case GhostscriptOutcome.Failed:
+				string scrubbedStderr = Scrub(result.StandardError, scrubSecret);
 				Console.WriteLine($"Ghostscript exited with code {result.ExitCode}.");
-				if (!string.IsNullOrWhiteSpace(result.StandardError))
-					Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
+				if (!string.IsNullOrWhiteSpace(scrubbedStderr))
+					Console.WriteLine($"Stderr: {scrubbedStderr.Trim()}");
 				recordError(originalPath,
-					$"ghostscript exit code {result.ExitCode}: {PdfFs.Truncate(result.StandardError, 200)}");
+					$"ghostscript exit code {result.ExitCode}: {PdfFs.Truncate(scrubbedStderr, 200)}");
 				return true;
 
 			case GhostscriptOutcome.MissingOutput:
@@ -63,5 +65,14 @@ internal static class RecursiveOutcomeReporter
 			default:
 				throw new InvalidOperationException($"Unhandled GhostscriptOutcome: {outcome}");
 		}
+	}
+
+	// See WatchOutcomeReporter.Scrub: defensive masking against a future gs
+	// version that echoes -sPDFPassword= to stderr.
+	private static string Scrub(string text, string? secret)
+	{
+		if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(secret))
+			return text;
+		return text.Replace(secret, "***");
 	}
 }

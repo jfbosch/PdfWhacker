@@ -81,12 +81,22 @@ public class PdfDecryptor
 					archivePath: processedOriginalFilePath,
 					outputPath: outputFilePath,
 					inputPath: inputFilePath,
-					WatchOutcomeReporter.FallbackVerb.PassThrough);
+					WatchOutcomeReporter.FallbackVerb.PassThrough,
+					scrubSecret: password);
 				return;
 			}
 
-			Console.WriteLine($"Tried {triedCount} password(s); none matched. Passing original through.");
-			PassOriginalThrough(processedOriginalFilePath, outputFilePath);
+			// Use a .locked.pdf suffix so the user has a visual cue in Explorer that
+			// the file is still encrypted — the previous behaviour copied the locked
+			// original under its original name, which was indistinguishable from a
+			// successful decrypt until you opened it.
+			string lockedOutputPath = BuildLockedOutputPath(outputFolderPath, inputFileName);
+			Console.WriteLine($"Tried {triedCount} password(s); none matched. Passing original through as {Path.GetFileName(lockedOutputPath)}.");
+			File.Copy(processedOriginalFilePath, lockedOutputPath, overwrite: false);
+			// outputFilePath holds whatever (probably empty/partial) bytes the final
+			// Ghostscript attempt wrote; we don't want it lingering under a name that
+			// looks like a decrypted result.
+			PdfFs.SafeDelete(outputFilePath);
 			PdfFs.SafeDelete(inputFilePath);
 		}
 		catch (Exception ex)
@@ -108,5 +118,21 @@ public class PdfDecryptor
 		if (!string.IsNullOrEmpty(reason))
 			Console.WriteLine($"Falling back to original ({reason}).");
 		File.Copy(originalCopyPath, outputFilePath, overwrite: true);
+	}
+
+	private static string BuildLockedOutputPath(string outputFolder, string originalFileName)
+	{
+		string baseName = Path.GetFileNameWithoutExtension(originalFileName);
+		string ext = Path.GetExtension(originalFileName);
+		string candidate = Path.Combine(outputFolder, $"{baseName}.locked{ext}");
+		if (!File.Exists(candidate))
+			return candidate;
+		for (int n = 2; n < 1000; n++)
+		{
+			candidate = Path.Combine(outputFolder, $"{baseName}.locked ({n}){ext}");
+			if (!File.Exists(candidate))
+				return candidate;
+		}
+		return Path.Combine(outputFolder, $"{baseName}.locked ({Guid.NewGuid():N}){ext}");
 	}
 }

@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace PdfWhacker;
 
-public static class PdfEncryptionDetector
+internal static class PdfEncryptionDetector
 {
 	private const int TailScanBytes = 4096;
 	private static readonly Regex EncryptEntryPattern = new(
