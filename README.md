@@ -1,6 +1,6 @@
 # PdfWhacker
 
-PdfWhacker is a console application written in C# that watches a specified directory for new PDF files to compress or merge them using Ghostscript.
+PdfWhacker is a console application written in C# that watches a specified directory for new PDF files to compress, decrypt, or merge them using Ghostscript.
 
 As a supplementary note, it is important to clarify that Ghostscript does not 'merge' PDF files in the conventional sense. Instead, it processes multiple PDF files as inputs to generate a completely new PDF file. While the visual appearance of the resulting PDF file is intended to be identical to that of the input files, the new file is an entirely distinct entity. The input files are fully interpreted, and the resultant file shares no commonalities with the original files beyond their visual representation.
 
@@ -11,6 +11,14 @@ Compress PDFs:
 
 - Watches the CompressionInput directory for new PDF files and compresses them automatically into the Output directory.
 - Compresses existing PDF files in the CompressionInput directory on startup, if there are any.
+
+
+Decrypt PDFs:
+
+- Watches the DecryptInput directory for new PDF files and removes their password protection automatically, writing the decrypted output to the Output directory.
+- Decrypts existing PDF files in the DecryptInput directory on startup, if there are any.
+- Candidate passwords are read from `appsettings.json` next to the executable (see [Password configuration](#password-configuration)).
+- One-shot recursive form: `PdfWhacker decrypt <directoryPath> <ghostscriptExecutablePath>` decrypts every password-protected PDF under `<directoryPath>` in place.
 
 
 Merge PDFs
@@ -40,10 +48,12 @@ PdfWhacker.exe <working folder path> <ghostscript executable path>
 The working directory will contain the following subdirectories:
 
 - CompressionInput: The application watches this directory for new PDF files to compress.
+- DecryptInput: The application watches this directory for new password-protected PDF files to decrypt.
 - MergeInput: The application watches this directory for new PDF files to be merged.
 - Original/Compression: The application moves the original PDF files to this directory after compressing them.
+- Original/Decrypt: The application moves the original PDF files to this directory after attempting to decrypt them.
 - Original/Merge: The application moves the original PDF files to this directory after merging them.
-- Output: The application saves both compressed PDF files (using their original filenames) and merged PDF files (named `merged-<timestamp>.pdf`) in this directory.
+- Output: The application saves compressed, decrypted (using their original filenames), and merged PDF files (named `merged-<timestamp>.pdf`) in this directory.
 
 If these directories do not exist, the application creates them.
 
@@ -56,9 +66,32 @@ During compression
 - Similarly, if a PDF is password protected, the original file is output to the compressed folder, as compression is not possible on encrypted PDFs. 
 
 - 
+During decryption:
+
+- If the PDF is not encrypted, the original is passed through to the Output folder unchanged.
+- If the PDF is encrypted, each configured password is tried in turn (preceded by an implicit no-password attempt that handles owner-password-only PDFs). The first password that succeeds produces the decrypted output.
+- If no configured password matches, the still-encrypted original is passed through to the Output folder (watch mode) or left in place (recursive `decrypt` mode, classified as "Skipped (locked)").
+- Decryption does not recompress the PDF — quality is preserved. Run compression separately afterward if you also want a smaller file.
+
 During merging:
 
 - If any of the input files are password protected, or if another error occurs, no merging will be completed, and the input files will be left in the MergeInput directory.
+
+## Password configuration
+
+Candidate passwords live in `appsettings.json` next to the `PdfWhacker` executable:
+
+```json
+{
+  "Passwords": [
+    "password1",
+    "password2",
+    "password3"
+  ]
+}
+```
+
+Every locked PDF is attempted against each password in this list, in order. If the file is missing, contains an empty list, or fails to parse, a warning is printed at startup and the system continues — only owner-password-only PDFs will then be decryptable. Passwords are never echoed to the console.
 
 ## Requirements
 

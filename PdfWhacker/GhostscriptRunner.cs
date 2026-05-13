@@ -5,12 +5,18 @@ namespace PdfWhacker;
 
 public sealed record GhostscriptResult(int ExitCode, string StandardError, bool TimedOut)
 {
-	private const string PasswordMarker = "This file requires a password for access";
+	// Ghostscript exits 0 even when it can't open an encrypted PDF; the only reliable
+	// signal is one of these stderr markers.
+	private static readonly string[] PasswordMarkers =
+	{
+		"This file requires a password for access", // emitted when no password is supplied
+		"Password did not work",                    // emitted when -sPDFPassword=... does not match
+	};
 
 	public bool Succeeded => !TimedOut && ExitCode == 0;
 
 	public bool PasswordProtected =>
-		StandardError.Contains(PasswordMarker, StringComparison.InvariantCultureIgnoreCase);
+		PasswordMarkers.Any(m => StandardError.Contains(m, StringComparison.InvariantCultureIgnoreCase));
 }
 
 public static class GhostscriptRunner
@@ -30,6 +36,27 @@ public static class GhostscriptRunner
 		psi.ArgumentList.Add("-dNOPAUSE");
 		psi.ArgumentList.Add("-dQUIET");
 		psi.ArgumentList.Add("-dBATCH");
+		psi.ArgumentList.Add($"-sOutputFile={outputPath}");
+		psi.ArgumentList.Add(inputPath);
+		return Run(psi, timeout ?? DefaultTimeout);
+	}
+
+	public static GhostscriptResult Decrypt(
+		string ghostscriptPath,
+		string inputPath,
+		string outputPath,
+		string password,
+		TimeSpan? timeout = null)
+	{
+		var psi = BuildBaseStartInfo(ghostscriptPath);
+		psi.ArgumentList.Add("-sDEVICE=pdfwrite");
+		psi.ArgumentList.Add("-dCompatibilityLevel=1.7");
+		psi.ArgumentList.Add("-dPDFSETTINGS=/default");
+		psi.ArgumentList.Add("-dNOPAUSE");
+		psi.ArgumentList.Add("-dQUIET");
+		psi.ArgumentList.Add("-dBATCH");
+		if (!string.IsNullOrEmpty(password))
+			psi.ArgumentList.Add($"-sPDFPassword={password}");
 		psi.ArgumentList.Add($"-sOutputFile={outputPath}");
 		psi.ArgumentList.Add(inputPath);
 		return Run(psi, timeout ?? DefaultTimeout);

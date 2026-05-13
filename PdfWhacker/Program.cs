@@ -12,6 +12,8 @@ switch (args[0])
 		return RunWatchMode(args);
 	case "compress":
 		return RunCompressMode(args);
+	case "decrypt":
+		return RunDecryptMode(args);
 	default:
 		PrintUsage();
 		return 1;
@@ -19,18 +21,22 @@ switch (args[0])
 
 static void PrintUsage()
 {
-	Console.WriteLine("PdfWhacker — PDF compression and merging tool");
+	Console.WriteLine("PdfWhacker — PDF compression, merging, and decryption tool");
 	Console.WriteLine();
 	Console.WriteLine("Usage:");
 	Console.WriteLine("  PdfWhacker watch    <workingFolderPath> <ghostscriptExecutablePath>");
 	Console.WriteLine("  PdfWhacker compress <directoryPath>     <ghostscriptExecutablePath>");
+	Console.WriteLine("  PdfWhacker decrypt  <directoryPath>     <ghostscriptExecutablePath>");
 	Console.WriteLine();
-	Console.WriteLine("  watch    — Long-running mode. Watches <workingFolderPath>/CompressionInput");
-	Console.WriteLine("             and <workingFolderPath>/MergeInput for PDFs and produces output");
-	Console.WriteLine("             in <workingFolderPath>/Output.");
+	Console.WriteLine("  watch    — Long-running mode. Watches <workingFolderPath>/CompressionInput,");
+	Console.WriteLine("             <workingFolderPath>/DecryptInput, and <workingFolderPath>/MergeInput");
+	Console.WriteLine("             for PDFs and produces output in <workingFolderPath>/Output.");
 	Console.WriteLine("  compress — One-shot mode. Recursively compresses all PDFs in <directoryPath>");
 	Console.WriteLine("             in place. Originals are only replaced when compression succeeds");
 	Console.WriteLine("             and meets the minimum size-reduction threshold.");
+	Console.WriteLine("  decrypt  — One-shot mode. Recursively decrypts password-protected PDFs in");
+	Console.WriteLine("             <directoryPath> in place using passwords from appsettings.json");
+	Console.WriteLine("             next to the executable.");
 }
 
 static int RunCompressMode(string[] args)
@@ -56,6 +62,32 @@ static int RunCompressMode(string[] args)
 	}
 
 	return new RecursivePdfCompressor().CompressTree(directoryPath, ghostscriptExecutablePath);
+}
+
+static int RunDecryptMode(string[] args)
+{
+	if (args.Length < 3)
+	{
+		Console.WriteLine("Usage: PdfWhacker decrypt <directoryPath> <ghostscriptExecutablePath>");
+		return 1;
+	}
+
+	string directoryPath = args[1];
+	string ghostscriptExecutablePath = args[2];
+
+	if (!Directory.Exists(directoryPath))
+	{
+		Console.WriteLine($"Directory not found: {directoryPath}");
+		return 1;
+	}
+	if (!File.Exists(ghostscriptExecutablePath))
+	{
+		Console.WriteLine($"Ghostscript executable not found: {ghostscriptExecutablePath}");
+		return 1;
+	}
+
+	var passwordStore = PasswordStore.LoadFromBaseDirectory();
+	return new RecursivePdfDecryptor().DecryptTree(directoryPath, ghostscriptExecutablePath, passwordStore.Passwords);
 }
 
 static int RunWatchMode(string[] args)
@@ -124,6 +156,51 @@ static int RunWatchMode(string[] args)
 		compressionQueue.Add(e.FullPath);
 	};
 	compressionFileWatcher.EnableRaisingEvents = true;
+
+	// PDF Decrypt
+	var passwordStore = PasswordStore.LoadFromBaseDirectory();
+
+	string decryptInputFolderPath = Path.Combine(workingFolderPath, "DecryptInput");
+	string decryptProcessedFolderPath = Path.Combine(workingFolderPath, "Original", "Decrypt");
+	string decryptOutputFolderPath = Path.Combine(workingFolderPath, "Output");
+	Directory.CreateDirectory(decryptInputFolderPath);
+	Directory.CreateDirectory(decryptProcessedFolderPath);
+	Directory.CreateDirectory(decryptOutputFolderPath);
+
+	var decryptQueue = new System.Collections.Concurrent.BlockingCollection<string>();
+	var decryptWorker = new Thread(() =>
+	{
+		var decryptor = new PdfDecryptor();
+		foreach (var filePath in decryptQueue.GetConsumingEnumerable())
+		{
+			try
+			{
+				decryptor.DecryptFile(filePath, decryptOutputFolderPath, decryptProcessedFolderPath, ghostscriptExecutablePath, passwordStore.Passwords);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Decryption worker error for '{filePath}': {ex.Message}");
+			}
+		}
+	})
+	{ IsBackground = true, Name = "PdfWhacker-Decryption" };
+	decryptWorker.Start();
+
+	foreach (var filePath in EnumeratePdfs(decryptInputFolderPath))
+		decryptQueue.Add(filePath);
+
+	var decryptFileWatcher = new FileSystemWatcher(decryptInputFolderPath)
+	{
+		NotifyFilter = NotifyFilters.FileName,
+		Filter = "*.pdf"
+	};
+	decryptFileWatcher.Created += (sender, e) =>
+	{
+		if (!Path.GetExtension(e.FullPath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+			return;
+		decryptQueue.Add(e.FullPath);
+	};
+	decryptFileWatcher.EnableRaisingEvents = true;
 
 	// PDF Merge
 	string mergeInputFolderPath = Path.Combine(workingFolderPath, "MergeInput");
@@ -205,9 +282,12 @@ static int RunWatchMode(string[] args)
 	}
 
 	compressionQueue.CompleteAdding();
+	decryptQueue.CompleteAdding();
 	compressionFileWatcher.Dispose();
+	decryptFileWatcher.Dispose();
 	mergeFileWatcher.Dispose();
 	compressionWorker.Join(TimeSpan.FromSeconds(5));
+	decryptWorker.Join(TimeSpan.FromSeconds(5));
 
 	return 0;
 
