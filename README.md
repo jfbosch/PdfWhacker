@@ -124,3 +124,4 @@ I have long been a fan of the many tools at ILovePDF, such as their compression 
 https://www.ilovepdf.com/compress_pdf
 However, it got tedious to keep uploading my documents to their site and then downloading the compressed versions. Also, while I have no reason to doubt their security and practices, there is always some level of concern when uploading confidential documents to a third-party public site.
 Thus, I decided to write a little app that runs locally. It allows me to drop PDFs into one folder and they show up compressed in another folder within a second or two. This application is really just an automation around GhostScript, which you can use to achieve the same manually.
+
