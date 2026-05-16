@@ -6,6 +6,13 @@ public class RecursivePdfCompressor
 	private const string TempFileSuffix = ".pdfwhacker.tmp";
 	private const string TempFilePattern = "*" + TempFileSuffix;
 
+	// 60 seconds of patience for a viewer to release a PDF. Below ~30s the recursive
+	// sweep noticeably skips files the user has briefly opened. The watch-mode
+	// FileReadyWaiter uses 120s; 60s is the middle ground that still lets a fully
+	// locked file fall through the scan without stalling it for minutes.
+	private const int LockWaitAttempts = 240;
+	private const int LockWaitDelayMs = 250;
+
 	public int CompressTree(string rootDirectory, string ghostscriptPath)
 	{
 		var stats = new CompressionStats();
@@ -16,7 +23,7 @@ public class RecursivePdfCompressor
 			Console.WriteLine($"Removed {swept} stale temp file(s).");
 
 		Console.WriteLine($"Scanning for PDFs under {rootDirectory}...");
-		foreach (var pdfPath in EnumeratePdfs(rootDirectory))
+		foreach (var pdfPath in PdfFs.EnumeratePdfs(rootDirectory, recursive: true))
 		{
 			stats.Scanned++;
 			CompressSingleFileInPlace(pdfPath, ghostscriptPath, stats);
@@ -61,15 +68,6 @@ public class RecursivePdfCompressor
 		return count;
 	}
 
-	private static IEnumerable<string> EnumeratePdfs(string root) =>
-		Directory.EnumerateFiles(root, "*.pdf", new EnumerationOptions
-		{
-			RecurseSubdirectories = true,
-			AttributesToSkip = FileAttributes.ReparsePoint,
-			IgnoreInaccessible = true,
-		})
-		.Where(p => Path.GetExtension(p).Equals(".pdf", StringComparison.OrdinalIgnoreCase));
-
 	private static void CompressSingleFileInPlace(string originalPath, string ghostscriptPath, CompressionStats stats)
 	{
 		Console.WriteLine();
@@ -80,7 +78,7 @@ public class RecursivePdfCompressor
 
 		try
 		{
-			if (!TryWaitForExclusiveAccess(originalPath, maxAttempts: 8, delayMs: 250))
+			if (!PdfFs.TryWaitForExclusiveAccess(originalPath, LockWaitAttempts, LockWaitDelayMs))
 			{
 				Console.WriteLine("File is locked by another process; skipping.");
 				stats.SkippedLocked++;
@@ -113,58 +111,25 @@ public class RecursivePdfCompressor
 				return;
 			}
 
-			if (result.PasswordProtected)
+			var outcome = PdfPipeline.Classify(result, tempPath);
+			if (outcome == GhostscriptOutcome.EncryptedNoMatch)
 			{
 				Console.WriteLine("PDF is password-protected; keeping original.");
 				stats.SkippedEncrypted++;
 				return;
 			}
 
-			if (!result.Succeeded)
+			if (RecursiveOutcomeReporter.TryRecordFailure(outcome, result, originalPath,
+				(p, reason) => { stats.Errored++; stats.ErrorDetails.Add((p, reason)); }))
 			{
-				if (result.TimedOut)
-					Console.WriteLine("Ghostscript timed out.");
-				else
-					Console.WriteLine($"Ghostscript exited with code {result.ExitCode}.");
-				if (!string.IsNullOrWhiteSpace(result.StandardError))
-					Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
-				stats.Errored++;
-				stats.ErrorDetails.Add((originalPath,
-					result.TimedOut
-						? "ghostscript timed out"
-						: $"ghostscript exit code {result.ExitCode}: {Truncate(result.StandardError, 200)}"));
 				return;
 			}
 
 			// Exit code 0 but with stderr output: treat as informational (font substitutions, etc.).
 			if (!string.IsNullOrWhiteSpace(result.StandardError))
-				Console.WriteLine($"Ghostscript notes: {Truncate(result.StandardError, 200)}");
-
-			if (!File.Exists(tempPath))
-			{
-				Console.WriteLine("Ghostscript did not produce an output file.");
-				stats.Errored++;
-				stats.ErrorDetails.Add((originalPath, "no output file produced"));
-				return;
-			}
+				Console.WriteLine($"Ghostscript notes: {PdfFs.Truncate(result.StandardError, 200)}");
 
 			long compressedSize = new FileInfo(tempPath).Length;
-			if (compressedSize == 0)
-			{
-				Console.WriteLine("Ghostscript produced an empty output file.");
-				stats.Errored++;
-				stats.ErrorDetails.Add((originalPath, "output file is zero bytes"));
-				return;
-			}
-
-			if (!GhostscriptRunner.IsValidPdfStructure(tempPath))
-			{
-				Console.WriteLine("Output file failed PDF structural validation.");
-				stats.Errored++;
-				stats.ErrorDetails.Add((originalPath, "output file failed PDF structure check"));
-				return;
-			}
-
 			double ratio = (double)compressedSize / originalSize;
 			Console.WriteLine($"Original: {originalSize:N0} bytes  Compressed: {compressedSize:N0} bytes  Ratio: {ratio * 100:F2}%");
 
@@ -207,51 +172,17 @@ public class RecursivePdfCompressor
 		}
 		catch (Exception ex)
 		{
-			Console.WriteLine($"Unexpected error: {ex.Message}");
+			// Match the watch-mode pipelines: log the full exception (stack trace
+			// included) so a recursive run that hits an unexpected error is
+			// debuggable without a re-run under a debugger.
+			Console.WriteLine($"Unexpected error: {ex}");
 			stats.Errored++;
 			stats.ErrorDetails.Add((originalPath, $"unexpected: {ex.Message}"));
 		}
 		finally
 		{
-			try
-			{
-				if (File.Exists(tempPath))
-					File.Delete(tempPath);
-			}
-			catch (Exception ex)
-			{
-				Console.WriteLine($"Failed to clean up temp file '{tempPath}': {ex.Message}");
-			}
+			PdfFs.SafeDelete(tempPath);
 		}
-	}
-
-	private static bool TryWaitForExclusiveAccess(string filePath, int maxAttempts, int delayMs)
-	{
-		for (int i = 0; i < maxAttempts; i++)
-		{
-			try
-			{
-				using var stream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.None);
-				return stream.Length > 0;
-			}
-			catch (IOException)
-			{
-				Thread.Sleep(delayMs);
-			}
-			catch (UnauthorizedAccessException)
-			{
-				return false;
-			}
-		}
-		return false;
-	}
-
-	private static string Truncate(string s, int maxLen)
-	{
-		if (string.IsNullOrEmpty(s))
-			return string.Empty;
-		s = s.Replace("\r", " ").Replace("\n", " ").Trim();
-		return s.Length <= maxLen ? s : s.Substring(0, maxLen) + "...";
 	}
 
 	private static void PrintSummary(CompressionStats stats)

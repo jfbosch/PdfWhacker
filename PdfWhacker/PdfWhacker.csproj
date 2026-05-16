@@ -10,4 +10,14 @@
     <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
 
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PdfWhacker.Tests" />
+  </ItemGroup>
+
 </Project>

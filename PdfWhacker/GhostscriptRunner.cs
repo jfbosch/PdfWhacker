@@ -5,12 +5,18 @@ namespace PdfWhacker;
 
 public sealed record GhostscriptResult(int ExitCode, string StandardError, bool TimedOut)
 {
-	private const string PasswordMarker = "This file requires a password for access";
+	// Ghostscript exits 0 even when it can't open an encrypted PDF; the only reliable
+	// signal is one of these stderr markers.
+	private static readonly string[] PasswordMarkers =
+	{
+		"This file requires a password for access", // emitted when no password is supplied
+		"Password did not work",                    // emitted when -sPDFPassword=... does not match
+	};
 
 	public bool Succeeded => !TimedOut && ExitCode == 0;
 
 	public bool PasswordProtected =>
-		StandardError.Contains(PasswordMarker, StringComparison.InvariantCultureIgnoreCase);
+		PasswordMarkers.Any(m => StandardError.Contains(m, StringComparison.InvariantCultureIgnoreCase));
 }
 
 public static class GhostscriptRunner
@@ -30,8 +36,29 @@ public static class GhostscriptRunner
 		psi.ArgumentList.Add("-dNOPAUSE");
 		psi.ArgumentList.Add("-dQUIET");
 		psi.ArgumentList.Add("-dBATCH");
-		psi.ArgumentList.Add($"-sOutputFile={outputPath}");
-		psi.ArgumentList.Add(inputPath);
+		psi.ArgumentList.Add($"-sOutputFile={NormalizePath(outputPath)}");
+		psi.ArgumentList.Add(NormalizePath(inputPath));
+		return Run(psi, timeout ?? DefaultTimeout);
+	}
+
+	public static GhostscriptResult Decrypt(
+		string ghostscriptPath,
+		string inputPath,
+		string outputPath,
+		string password,
+		TimeSpan? timeout = null)
+	{
+		var psi = BuildBaseStartInfo(ghostscriptPath);
+		psi.ArgumentList.Add("-sDEVICE=pdfwrite");
+		psi.ArgumentList.Add("-dCompatibilityLevel=1.7");
+		psi.ArgumentList.Add("-dPDFSETTINGS=/default");
+		psi.ArgumentList.Add("-dNOPAUSE");
+		psi.ArgumentList.Add("-dQUIET");
+		psi.ArgumentList.Add("-dBATCH");
+		if (!string.IsNullOrEmpty(password))
+			psi.ArgumentList.Add($"-sPDFPassword={password}");
+		psi.ArgumentList.Add($"-sOutputFile={NormalizePath(outputPath)}");
+		psi.ArgumentList.Add(NormalizePath(inputPath));
 		return Run(psi, timeout ?? DefaultTimeout);
 	}
 
@@ -45,9 +72,9 @@ public static class GhostscriptRunner
 		psi.ArgumentList.Add("-sDEVICE=pdfwrite");
 		psi.ArgumentList.Add("-dNOPAUSE");
 		psi.ArgumentList.Add("-dBATCH");
-		psi.ArgumentList.Add($"-sOutputFile={outputPath}");
+		psi.ArgumentList.Add($"-sOutputFile={NormalizePath(outputPath)}");
 		foreach (var input in inputPaths)
-			psi.ArgumentList.Add(input);
+			psi.ArgumentList.Add(NormalizePath(input));
 		return Run(psi, timeout ?? DefaultTimeout);
 	}
 
@@ -81,14 +108,25 @@ public static class GhostscriptRunner
 		}
 	}
 
-	private static ProcessStartInfo BuildBaseStartInfo(string ghostscriptPath) =>
-		new()
+	private static ProcessStartInfo BuildBaseStartInfo(string ghostscriptPath)
+	{
+		var psi = new ProcessStartInfo
 		{
 			FileName = ghostscriptPath,
 			UseShellExecute = false,
 			CreateNoWindow = true,
 			RedirectStandardError = true,
 		};
+		// -dSAFER restricts PostScript file-system access. Default in Ghostscript 10+,
+		// but pass explicitly so older installs are also hardened against malicious PDFs.
+		psi.ArgumentList.Add("-dSAFER");
+		return psi;
+	}
+
+	// Ghostscript has no `--` separator, so a path beginning with `-` would be parsed as
+	// a flag. Forcing an absolute path also avoids relying on the runner's CWD.
+	private static string NormalizePath(string path) =>
+		string.IsNullOrEmpty(path) ? path : Path.GetFullPath(path);
 
 	private static GhostscriptResult Run(ProcessStartInfo psi, TimeSpan timeout)
 	{

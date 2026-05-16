@@ -24,8 +24,8 @@ public class PdfCompressor
 				return;
 			}
 
-			string outputFilePath = Path.Combine(outputFolderPath, inputFileName);
-			string processedOriginalFilePath = Path.Combine(processedOriginalFolderPath, inputFileName);
+			var (processedOriginalFilePath, outputFilePath) =
+				PdfFs.BuildUniquePathPair(processedOriginalFolderPath, outputFolderPath, inputFileName);
 
 			long originalSize = new FileInfo(inputFilePath).Length;
 			if (originalSize == 0)
@@ -34,6 +34,9 @@ public class PdfCompressor
 				return;
 			}
 
+			// Invariant: archive a copy of the original before invoking Ghostscript so
+			// any failure path (gs crash, bad output, encrypted, no benefit) can fall
+			// back to a known-good copy without touching the input file again.
 			File.Copy(inputFilePath, processedOriginalFilePath, overwrite: true);
 
 			GhostscriptResult result;
@@ -45,35 +48,18 @@ public class PdfCompressor
 			{
 				Console.WriteLine($"Ghostscript invocation failed: {ex.Message}");
 				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, "ghostscript invocation failed");
-				DeleteIfExists(inputFilePath);
+				PdfFs.SafeDelete(inputFilePath);
 				return;
 			}
 
-			if (result.PasswordProtected)
+			var outcome = PdfPipeline.Classify(result, outputFilePath);
+			if (WatchOutcomeReporter.TryApplyFallback(
+				outcome, result,
+				archivePath: processedOriginalFilePath,
+				outputPath: outputFilePath,
+				inputPath: inputFilePath,
+				WatchOutcomeReporter.FallbackVerb.CopyToOutput))
 			{
-				Console.WriteLine("PDF is password-protected; copying original to output.");
-				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
-				DeleteIfExists(inputFilePath);
-				return;
-			}
-
-			if (!result.Succeeded)
-			{
-				Console.WriteLine(result.TimedOut
-					? "Ghostscript timed out; copying original to output."
-					: $"Ghostscript exited with code {result.ExitCode}; copying original to output.");
-				if (!string.IsNullOrWhiteSpace(result.StandardError))
-					Console.WriteLine($"Stderr: {result.StandardError.Trim()}");
-				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
-				DeleteIfExists(inputFilePath);
-				return;
-			}
-
-			if (!File.Exists(outputFilePath) || !GhostscriptRunner.IsValidPdfStructure(outputFilePath))
-			{
-				Console.WriteLine("Ghostscript output missing or failed structural validation; copying original to output.");
-				CopyOriginalToOutput(processedOriginalFilePath, outputFilePath, reason: null);
-				DeleteIfExists(inputFilePath);
 				return;
 			}
 
@@ -91,7 +77,7 @@ public class PdfCompressor
 				Console.WriteLine($"Compressed: {compressedSize:N0} bytes ({ratio * 100:F2}% of original)");
 			}
 
-			DeleteIfExists(inputFilePath);
+			PdfFs.SafeDelete(inputFilePath);
 		}
 		catch (Exception ex)
 		{
@@ -105,11 +91,5 @@ public class PdfCompressor
 		if (!string.IsNullOrEmpty(reason))
 			Console.WriteLine($"Falling back to original ({reason}).");
 		File.Copy(originalCopyPath, outputFilePath, overwrite: true);
-	}
-
-	private static void DeleteIfExists(string path)
-	{
-		if (File.Exists(path))
-			File.Delete(path);
 	}
 }

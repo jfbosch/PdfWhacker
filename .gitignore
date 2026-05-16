@@ -77,3 +77,9 @@ src/Positron.Website/wwwroot/internal/*.svg
 src/Positron.Website/wwwroot/app/1.2/
 src/Positron.Website/appsettings.Development.json
 /src/Positron.Website/wwwroot/internal
+
+# Ship the bundled Ghostscript install with the repo so a fresh clone has
+# everything required for the integration test suite. These negations override
+# the [Bb]in/, [Oo]bj/, and *.cache rules above for paths under Ghostscript/.
+!Ghostscript/
+!Ghostscript/**
